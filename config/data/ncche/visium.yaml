@@ -1,0 +1,48 @@
+GENERAL:
+  seed: 2021
+  log_path: ./logs
+  save_predictions: true
+TRAINING:
+  num_k: 5
+  learning_rate: 0.0001
+  num_epochs: 200
+  monitor: PearsonCorrCoef
+  mode: max
+  save_best_only: true
+  early_stopping:
+    patience: 20
+  lr_scheduler:
+    patience: 5
+    factor: 0.1
+  every_n_epochs: 1
+DATA:
+  data_dir: /path/to/stp_bench_data
+  meta_dir: input/ncche/visium
+  output_dir: output/pred
+  gene_type: hmhvg_imm
+  num_genes: 226
+  num_outputs: 226
+  normalize: true
+  cpm: false
+  smooth: false
+  model_name: uni_v2
+  load_level: patch
+  organ: Lung
+  tech: Visium
+  train_dataloader:
+    batch_size: 128
+    num_workers: 4
+    pin_memory: false
+    shuffle: true
+  test_dataloader:
+    batch_size: 1
+    num_workers: 4
+    pin_memory: false
+    shuffle: false
+preprocess:
+  mode: stpbench
+  platform: visium
+  meta_dir: input/ncche/visium
+  input_dir: /path/to/stp_bench_data
+  output_dir: /path/to/stp_bench_data
+  overwrite: false

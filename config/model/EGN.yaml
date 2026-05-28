@@ -1,0 +1,11 @@
+MODEL:
+  model_name: EGN.EGN
+  mdim: 1536
+  extra_preprocess:
+  - script: build_exemplar.py
+    args:
+      model_name: ~
+      distance_metric: l1
+  adapter: egn
+DATA:
+  dataset_name: EGNDataset

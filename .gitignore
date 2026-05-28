@@ -1,0 +1,6 @@
+logs/*
+output/*
+local
+
+*.pyc
+__pycache__/

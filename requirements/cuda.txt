@@ -1,0 +1,4 @@
+cucim-cu12>=25.8.0
+cudf-cu12>=25.8.0
+dask-cudf-cu12>=25.8.0
+raft-dask-cu12>=25.8.0

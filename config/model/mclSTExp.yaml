@@ -1,0 +1,18 @@
+TRAINING:
+  mode: max
+  save_best_only: true
+MODEL:
+  model_name: mclstexp.mclSTExp
+  encoder_name: densenet121
+  temperature: 1.0
+  image_dim: 1536
+  projection_dim: 512
+  heads_num: 8
+  heads_dim: 64
+  head_layers: 2
+  dropout: 0.1
+  use_pretrained_emb: true
+  n_pos: 20000
+  adapter: contrastive
+DATA:
+  dataset_name: BleepDataset

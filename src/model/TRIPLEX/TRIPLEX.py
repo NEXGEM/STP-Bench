@@ -1,0 +1,300 @@
+
+import os 
+import inspect
+import importlib
+
+import wget
+import numpy as np
+from scipy.stats import pearsonr
+import torch
+import torch.nn as nn
+import torchvision
+import pytorch_lightning as pl
+
+import torch.nn.functional as F
+from einops import rearrange
+
+from model.TRIPLEX.module import ( GlobalEncoder, 
+                                NeighborEncoder, 
+                                FusionEncoder )
+
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+
+_TRIPLEX_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def load_model_weights(ckpt: str):
+        """Load pretrained ResNet18 model without final fc layer.
+
+        Args:
+            ckpt (str): checkpoint filename (looked up in the TRIPLEX model directory)
+
+        Returns:
+            torchvision.models.resnet.ResNet: ResNet model with pretrained weight
+        """
+
+        resnet = torchvision.models.__dict__['resnet18'](weights=None)
+
+        ckpt_path = os.path.join(_TRIPLEX_DIR, ckpt)
+
+        # download if not present
+        if not os.path.exists(ckpt_path):
+            ckpt_url='https://github.com/ozanciga/self-supervised-histopathology/releases/download/tenpercent/tenpercent_resnet18.ckpt'
+            wget.download(ckpt_url, out=_TRIPLEX_DIR)
+            
+        state = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        state_dict = state['state_dict']
+        for key in list(state_dict.keys()):
+            state_dict[key.replace('model.', '').replace('resnet.', '')] = state_dict.pop(key)
+        
+        model_dict = resnet.state_dict()
+        state_dict = {k: v for k, v in state_dict.items() if k in model_dict}
+        if state_dict == {}:
+            print('No weight could be loaded..')
+        model_dict.update(state_dict)
+        resnet.load_state_dict(model_dict)
+        resnet.fc = nn.Identity()
+
+        return resnet
+
+
+class TRIPLEX(nn.Module):
+    """Model class for TRIPLEX
+    """
+    def __init__(self, 
+                num_genes=250,
+                emb_dim=512,
+                depth1=2,
+                depth2=2,
+                depth3=2,
+                num_heads1=8,
+                num_heads2=8,
+                num_heads3=8,
+                mlp_ratio1=2.0,
+                mlp_ratio2=2.0,
+                mlp_ratio3=2.0,
+                dropout1=0.1,
+                dropout2=0.1,
+                dropout3=0.1,
+                kernel_size=3,
+                res_neighbor=(5,5),
+                pos_layer='APEG',
+                max_batch_size=1024,
+                non_negative_output: bool = True):
+        """TRIPLEX model 
+
+        Args:
+            num_genes (int): Number of genes to predict.
+            emb_dim (int): Embedding dimension for images. Defaults to 512.
+            depth1 (int): Depth of FusionEncoder. Defaults to 2.
+            depth2 (int): Depth of GlobalEncoder. Defaults to 2.
+            depth3 (int): Depth of NeighborEncoder. Defaults to 2.
+            num_heads1 (int): Number of heads for FusionEncoder. Defaults to 8.
+            num_heads2 (int): Number of heads for GlobalEncoder. Defaults to 8.
+            num_heads3 (int): Number of heads for NeighborEncoder. Defaults to 8.
+            mlp_ratio1 (float): mlp_ratio (MLP dimension/emb_dim) for FusionEncoder. Defaults to 2.0.
+            mlp_ratio2 (float): mlp_ratio (MLP dimension/emb_dim) for GlobalEncoder. Defaults to 2.0.
+            mlp_ratio3 (float): mlp_ratio (MLP dimension/emb_dim) for NeighborEncoder. Defaults to 2.0.
+            dropout1 (float): Dropout rate for FusionEncoder. Defaults to 0.1.
+            dropout2 (float): Dropout rate for GlobalEncoder. Defaults to 0.1.
+            dropout3 (float): Dropout rate for NeighborEncoder. Defaults to 0.1.
+            kernel_size (int): Kernel size of convolution layer in PEGH. Defaults to 3.
+            res_neighbor (tuple): Resolution of neighbor embeddings. Defaults to (5,5).
+            max_batch_size (int): Maximum batch size for inference. Defaults to 1024.
+        """
+        
+        super().__init__()
+
+        if emb_dim > 1536:
+            self.global_mapping = nn.Linear(emb_dim, 1536)
+            self.neighbor_mapping = nn.Linear(emb_dim, 1536)
+            emb_dim = 1536
+        
+        self.alpha = 0.3
+        self.emb_dim = emb_dim
+        self.max_batch_size = max_batch_size
+        self.non_negative_output = non_negative_output
+    
+        # Target Encoder
+        resnet18 = load_model_weights("tenpercent_resnet18.ckpt")
+        module=list(resnet18.children())[:-2]
+        self.target_encoder = nn.Sequential(*module)
+        self.fc_target = nn.Linear(emb_dim, num_genes)
+        
+        self.target_linear = nn.Linear(512, emb_dim)
+
+        # Neighbor Encoder
+        # self.neighbor_linear = nn.Linear(1536, emb_dim)
+        self.neighbor_encoder = NeighborEncoder(emb_dim, 
+                                                depth3, 
+                                                num_heads3, 
+                                                int(emb_dim*mlp_ratio3), 
+                                                dropout = dropout3, 
+                                                resolution=res_neighbor)
+        self.fc_neighbor = nn.Linear(emb_dim, num_genes)
+
+        # Global Encoder        
+        # self.global_layer = nn.Linear(1536, emb_dim)
+        self.global_encoder = GlobalEncoder(emb_dim, 
+                                            depth2, 
+                                            num_heads2, 
+                                            int(emb_dim*mlp_ratio2), 
+                                            dropout2, 
+                                            kernel_size,
+                                            pos_layer)
+        self.fc_global = nn.Linear(emb_dim, num_genes)
+        
+        # Fusion Layer
+        self.fusion_encoder = FusionEncoder(emb_dim, 
+                                            depth1, 
+                                            num_heads1, 
+                                            int(emb_dim*mlp_ratio1), 
+                                            dropout1)    
+        
+        self.fc = nn.Linear(emb_dim, num_genes)
+        
+    def forward(self,
+                img, 
+                mask, 
+                neighbor_emb, 
+                position=None, 
+                global_emb=None, 
+                pid=None, 
+                sid=None, 
+                **kwargs):
+
+        phase = kwargs.get('phase', 'test')
+        if phase == 'train':
+            if 'dataset' not in kwargs:
+                raise ValueError('Please provide dataset for training phase')
+            # Training
+            return self._process_training_batch(img, mask, neighbor_emb, pid, sid, kwargs['dataset'], kwargs['label'])
+        else:
+            # Inference 
+            return self._process_inference_batch(img, mask, neighbor_emb, position, global_emb, sid)
+
+    def _process_training_batch(self, img, mask, neighbor_emb, pid, sid, dataset, label):
+        global_emb, position = self.retrieve_global_emb(pid, dataset)
+
+        if getattr(self, 'global_mapping', None) is not None:
+            neighbor_emb = self.neighbor_mapping(neighbor_emb)
+            for k in global_emb.keys():
+                global_emb[k] = self.global_mapping(global_emb[k])
+
+        fusion_token, target_token, neighbor_token, global_token = \
+            self._encode_all(img, mask, neighbor_emb, position, global_emb, pid, sid)
+        return self._get_outputs(fusion_token, target_token, neighbor_token, global_token, label)
+
+    def _process_inference_batch(self, img, mask, neighbor_emb, position, global_emb, sid=None):
+        if getattr(self, 'global_mapping', None) is not None:
+            neighbor_emb = self.neighbor_mapping(neighbor_emb)
+            global_emb = self.global_mapping(global_emb)
+
+        if sid is None and img.shape[0] > self.max_batch_size:
+            imgs = img.split(self.max_batch_size, dim=0)
+            neighbor_embs = neighbor_emb.split(self.max_batch_size, dim=0)
+            masks = mask.split(self.max_batch_size, dim=0)
+            sid = torch.arange(img.shape[0]).to(img.device)
+            sids = sid.split(self.max_batch_size, dim=0)
+            
+            pred = [self.fc(self._encode_all(img, mask, neighbor_emb, position, global_emb, sid=sid)[0]) \
+                for img, neighbor_emb, mask, sid in zip(imgs, neighbor_embs, masks, sids)]
+            
+            if self.non_negative_output:
+                pred = F.softplus(torch.cat(pred, dim=0))  # Ensure non-negativity
+            else:
+                pred = torch.cat(pred, dim=0)
+            
+            return {'logits': pred}    
+        else:
+            fusion_token, _, _, _ = self._encode_all(img, mask, neighbor_emb, position, global_emb, sid=sid)
+            
+            if self.non_negative_output:
+                pred = F.softplus(self.fc(fusion_token))
+            else:
+                pred = self.fc(fusion_token)
+
+        return {'logits': pred}
+    
+    def _encode_all(self, img, mask, neighbor_emb, position, global_emb, pid=None, sid=None):
+        target_token = self.encode_target(img)
+        # neighbor_emb = self.neighbor_linear(neighbor_emb)
+        neighbor_token = self.neighbor_encoder(neighbor_emb, mask)
+        global_token = self.encode_global(global_emb, position, pid, sid)
+        
+        fusion_token = self.fusion_encoder(target_token, neighbor_token, global_token, mask=mask)
+        
+        return fusion_token, target_token, neighbor_token, global_token
+    
+    def encode_target(self, img):
+        # Target tokens
+        target_token = self.target_encoder(img) # B x 512 x 7 x 7
+        B, dim, w, h = target_token.shape
+        target_token = rearrange(target_token, 'b d h w -> b (h w) d', d = dim, w=w, h=h)
+        target_token = self.target_linear(target_token)
+        
+        return target_token
+        
+    def encode_global(self, global_emb, position, pid=None, sid=None):
+        # Global tokens
+        if isinstance(global_emb, dict):
+            global_token = torch.zeros((sid.shape[0], self.emb_dim)).to(sid.device)
+            for _id, x_g in global_emb.items():
+                batch_idx = pid == _id
+                pos = position[_id]
+                # x_cond_encoded = self.encode_cond(x_g, pos[id_]) # N x D
+                # x_g = self.global_layer(x_g) # 1 x D
+                g_token = self.global_encoder(x_g, pos).squeeze()  # N x 512
+                global_token[batch_idx] = g_token[sid[batch_idx]] # B x D
+        else:
+            # global_emb = self.global_layer(global_emb) # B x D
+            global_token = self.global_encoder(global_emb, position).squeeze()  # N x 512
+            if sid is not None:
+                global_token = global_token[sid]
+                
+        return global_token
+        
+    def _get_outputs(self, fusion_token, target_token, neighbor_token, global_token, label):
+        
+        if self.non_negative_output:
+            output = F.softplus(self.fc(fusion_token))  # Ensure non-negativity
+            out_target = F.softplus(self.fc_target(target_token.mean(1)))
+            out_neighbor = F.softplus(self.fc_neighbor(neighbor_token.mean(1)))
+            out_global = F.softplus(self.fc_global(global_token))    
+        else:
+            output = self.fc(fusion_token)
+            out_target = self.fc_target(target_token.mean(1))
+            out_neighbor = self.fc_neighbor(neighbor_token.mean(1))
+            out_global = self.fc_global(global_token)
+            
+        preds = (output, out_target, out_neighbor, out_global)
+        
+        loss = self.calculate_loss(preds, label)
+        
+        return {'loss': loss, 'logits': output}
+        
+    def calculate_loss(self, preds, label):
+        
+        loss = F.mse_loss(preds[0], label)                       # Supervised loss for Fusion
+        
+        for i in range(1, len(preds)):
+            loss += F.mse_loss(preds[i], label) * (1-self.alpha) # Supervised loss
+            loss += F.mse_loss(preds[0], preds[i]) * self.alpha  # Distillation loss
+    
+        return loss
+    
+    def retrieve_global_emb(self, pid, dataset):
+        device = pid.device
+        unique_pid = pid.unique()
+        
+        global_emb = {}
+        pos = {}
+        for pid in unique_pid:
+            pid = int(pid)
+            _id = dataset.int2id[pid]
+            
+            global_emb[pid] = dataset.global_embs[_id].clone().to(device).unsqueeze(0)
+            pos[pid] = dataset.pos_dict[_id].clone().to(device)
+        
+        return global_emb, pos
+    

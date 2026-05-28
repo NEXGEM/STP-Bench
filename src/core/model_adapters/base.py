@@ -1,0 +1,48 @@
+class ModelAdapter:
+    """Adapter interface for model-specific LightningModule behavior."""
+
+    squeeze_specs = ()
+    flatten_specs = ()
+
+    def squeeze_batch(self, batch):
+        for key, ndim in self.squeeze_specs:
+            if key in batch and hasattr(batch[key], "shape") and len(batch[key].shape) == ndim:
+                batch[key] = batch[key].squeeze(0)
+        for key, ndim in self.flatten_specs:
+            if key in batch and hasattr(batch[key], "shape") and len(batch[key].shape) == ndim:
+                batch[key] = batch[key].view(-1)
+        return batch
+
+    def prepare_batch(self, module, batch, stage):
+        batch = self.squeeze_batch(batch)
+        return batch
+
+    def forward(self, module, batch, phase):
+        if phase == "train":
+            return module.model(**batch, phase=phase)
+        return module.model(**batch, phase=phase, device=module.device.type)
+
+    def get_label(self, module, batch, outputs, stage):
+        return batch["label"]
+
+    def get_predict_dataset(self, module):
+        return module._trainer.predict_dataloaders.dataset
+
+    def prepare_predict_batch(self, module, batch, dataset):
+        return self.squeeze_batch(batch)
+
+    def inference_prediction_context(self, module):
+        dataset = module._trainer.predict_dataloaders.dataset
+        return dataset.name, dataset.genes
+
+    def evaluation_prediction_context(self, module, batch_idx):
+        dataset = module._trainer.test_dataloaders.dataset
+        name = dataset.int2id[batch_idx]
+        genes = dataset.genes
+        id2dir = getattr(dataset, "id2dir", None)
+        return name, genes, id2dir
+
+    def after_optimizer_step(self, module):
+        ema = getattr(module.model, "ema", None)
+        if ema is not None:
+            ema.update()

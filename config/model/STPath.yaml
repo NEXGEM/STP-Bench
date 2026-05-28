@@ -1,0 +1,10 @@
+GENERAL:
+  use_amp: false
+MODEL:
+  model_name: stpath.STPathModule
+  fine_tune: false
+  adapter: contrastive
+DATA:
+  dataset_name: STPathDataset
+  model_name: gigapath
+  load_level: slide

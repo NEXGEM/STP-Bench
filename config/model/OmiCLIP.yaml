@@ -1,0 +1,11 @@
+MODEL:
+  model_name: omiclip.OmiCLIP
+  fine_tune: false
+  adapter: contrastive
+  extra_preprocess:
+  - script: cal_similarity_matrix.py
+    args:
+      model_path: ~
+DATA:
+  dataset_name: BleepDataset
+  load_level: slide

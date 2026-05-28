@@ -1,0 +1,5 @@
+datasets>=2.19.0
+valis-hest>=0.0.1
+accelerate==1.13.0
+hest @ git+https://github.com/mahmoodlab/HEST@3ddb5eaf5bd2a8133e0c0e8015816489a3d99dc3
+trident @ git+https://github.com/mahmoodlab/TRIDENT

@@ -1,0 +1,6 @@
+MODEL:
+  model_name: linear_prob.LinearProb
+  img_embedding_dim: 1536
+  adapter: default
+DATA:
+  dataset_name: STDataset

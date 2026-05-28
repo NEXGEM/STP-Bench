@@ -1,0 +1,26 @@
+MODEL:
+  model_name: M2ORT.M2ORT
+  image_size: 224
+  patch_size: 16
+  dim: 768
+  depth: 8
+  heads: 12
+  dim_head: 64
+  mlp_dim: 512
+  pool: cls
+  channels: 3
+  dropout: 0.0
+  emb_dropout: 0.0
+  adapter: default
+  extra_preprocess:
+  - script: extract_levels.py
+    args:
+      input_dir: ~    # auto-filled from preprocess.input_dir
+      platform: ~     # auto-filled from preprocess.platform
+      mode: ~         # auto-filled from preprocess.mode
+      levels: "1,2"
+DATA:
+  dataset_name: M2OSTDataset
+  feature_type: none
+  train_dataloader:
+    batch_size: 32

@@ -1,0 +1,15 @@
+MODEL:
+  model_name: his_to_gene.HisToGene
+  num_heads: 16
+  patch_size: 112
+  n_layers: 4
+  dim: 1536
+  dropout: 0.1
+  n_pos: 50000
+  use_pretrained_emb: true
+  adapter: default
+DATA:
+  dataset_name: HistDataset
+  load_level: slide
+  train_dataloader:
+    batch_size: 1

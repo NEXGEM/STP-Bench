@@ -1,0 +1,22 @@
+MODEL:
+  model_name: EGGN.EGGN
+  mdim: 1536
+  hidden_channels: 512
+  extra_preprocess:
+  - script: build_exemplar.py
+    args:
+      model_name: ~
+      distance_metric: l1
+  - script: generate_graph.py
+    args:
+      numk: 6
+      model_name: ~
+      gene_type: ~
+      num_genes: ~
+  adapter: graph
+DATA:
+  dataset_name: EGGNDataset
+  load_level: slide
+  train_dataloader:
+    batch_size: 1
+  datamodule_policy: graph

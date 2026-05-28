@@ -1,0 +1,13 @@
+MODEL:
+  model_name: deep_spot.DeepSpot
+  emb_dim: 1536
+  p: 0.3
+  n_ensemble: 10
+  phi2rho_size: 512
+  spot_context: spot_subspot_neighbors
+  adapter: default
+DATA:
+  dataset_name: DeepSpotDataset
+  feature_type: all
+preprocess:
+  save_neighbor_imgs: true

@@ -1,0 +1,6 @@
+MODEL:
+  model_name: Path2Space.Path2Space
+  emb_dim: 1536
+  adapter: default
+DATA:
+  dataset_name: GlobalDataset
