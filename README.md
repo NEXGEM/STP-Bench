@@ -172,20 +172,20 @@ print(stp.list_data())
 print(stp.list_models())
 
 # Validate configs and expected artifacts before a heavy run.
-stp.check(data="ncche/luad", strict=True)
+stp.check(data="ncche/xenium", strict=True)
 ```
 
 **Option A — one-shot benchmark:**
 
 ```python
-result = stp.benchmark(internal_data="ncche/luad", external_data="hest/lung")
+result = stp.benchmark(internal_data="ncche/xenium", external_data="hest/lung")
 ```
 
 **Option B — step by step:**
 
 ```python
-stp.preprocess(data="ncche/luad")
-stp.train(data="ncche/luad")
+stp.preprocess(data="ncche/xenium")
+stp.train(data="ncche/xenium")
 int_result = stp.evaluate_internal()
 ext_result = stp.evaluate_external(data="hest/lung")
 
@@ -198,14 +198,14 @@ ext_result.save("benchmark_results.csv")
 **Inference on unlabeled external data:**
 
 ```python
-pred_result = stp.predict(data="cptac/luad")
+pred_result = stp.predict(data="cptac/xenium")
 ```
 
 **Resume a known training run** without keeping the original Python process alive:
 
 ```python
 stp = STPred.from_run(
-    data="ncche/luad",
+    data="ncche/xenium",
     models=["StNet"],
     timestamp="2026-05-18-12-00-00",
 )
@@ -219,7 +219,7 @@ stp.save_state("logs/my_stpred_state.yaml")
 
 stp2 = STPred(models=["StNet"])
 stp2.load_state("logs/my_stpred_state.yaml")
-stp2.predict(data="cptac/luad")
+stp2.predict(data="cptac/xenium")
 ```
 
 **Discovery and config helpers:**
@@ -228,7 +228,7 @@ stp2.predict(data="cptac/luad")
 # On an instance: repo_root is inferred from stp automatically.
 stp.list_data()
 stp.list_models()
-stp.describe_data("ncche/luad")
+stp.describe_data("ncche/xenium")
 stp.describe_model("StNet")
 
 # As classmethods: pass repo_root explicitly if not running from repo root.
@@ -240,7 +240,7 @@ STPred.init_model_config("MyModel")
 Config names map exactly to YAML files:
 
 ```text
-config/data/ncche/luad.yaml
+config/data/ncche/xenium.yaml
 config/data/hest/lung.yaml
 config/model/StNet.yaml
 ```
@@ -503,9 +503,9 @@ That's it. `MyModel` will appear in `STPred.list_models()` and is ready to use:
 
 ```python
 stp = STPred(models=["MyModel"])
-stp.check(data="ncche/luad")
-stp.preprocess(data="ncche/luad")
-stp.train(data="ncche/luad")
+stp.check(data="ncche/xenium")
+stp.preprocess(data="ncche/xenium")
+stp.train(data="ncche/xenium")
 ```
 
 ### Common config options

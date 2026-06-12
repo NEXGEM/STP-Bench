@@ -19,9 +19,9 @@ DATA:
   data_dir: /path/to/stp_bench_data
   meta_dir: input/snu/GBM
   output_dir: output/pred
-  gene_type: hmhvg_imm
-  num_genes: 225
-  num_outputs: 225
+  gene_type: hmhvg
+  num_genes: 200
+  num_outputs: 200
   normalize: true
   cpm: false
   smooth: false

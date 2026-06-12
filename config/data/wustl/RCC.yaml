@@ -19,9 +19,9 @@ DATA:
   data_dir: /path/to/stp_bench_data
   meta_dir: input/wustl/RCC
   output_dir: output/pred
-  gene_type: hmhvg_imm
-  num_genes: 227
-  num_outputs: 227
+  gene_type: hmhvg
+  num_genes: 200
+  num_outputs: 200
   normalize: true
   cpm: false
   smooth: false

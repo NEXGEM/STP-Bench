@@ -16,7 +16,7 @@ TRAINING:
     factor: 0.1
   every_n_epochs: 1
 DATA:
-  data_dir: /data-hdd/home/shared/spRNAseq/public/stp_bench
+  data_dir: /path/to/stp_bench_data
   meta_dir: input/ncche/xenium
   output_dir: output/pred
   gene_type: hmhvg
@@ -43,6 +43,6 @@ preprocess:
   mode: stpbench
   platform: xenium
   meta_dir: input/ncche/xenium
-  input_dir: /data-hdd/home/shared/spRNAseq/public/stp_bench
-  output_dir: /data-hdd/home/shared/spRNAseq/public/stp_bench
+  input_dir: /path/to/stp_bench_data
+  output_dir: /path/to/stp_bench_data
   overwrite: false
