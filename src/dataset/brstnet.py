@@ -46,7 +46,7 @@ class BrSTNetDataset(STDataset):
                         )
     
         if mode != 'inference':
-            total_gene_path = glob(f"{self.data_dir}/total_*.json")[0]
+            total_gene_path = glob(f"{self.meta_dir}/total_*.json")[0]
             with open(total_gene_path, 'r') as f:
                 total_genes = json.load(f)['genes']
             

@@ -20,6 +20,7 @@ class EGNDataset(STDataset):
                 data_dir: str,
                 meta_dir: str = None,
                 wsi_dir: str = None,
+                asset_dir: str = None,
                 distance_metric: str = 'l1',
                 gene_type: str = 'mean',
                 num_genes: int = 1000,
@@ -30,6 +31,7 @@ class EGNDataset(STDataset):
                 data_id: str = None,
                 model_name: str = 'uni_v2',
                 ref_data_dir: str = None,
+                ref_asset_dir: str = None,
                 load_level: str = 'patch'
                 ):
         # Treat same-directory ref as no-ref: internal evaluation always sets
@@ -57,10 +59,15 @@ class EGNDataset(STDataset):
                                 load_level=load_level)
 
         self.num_outputs = num_outputs
+        self.asset_dir = asset_dir or self.asset_dir
+        self.img_dir = f"{self.asset_dir}/patches"
+        self.st_dir = resolve_st_dir(self.asset_dir)
+        self.emb_dir = f"{self.asset_dir}/emb"
 
         # self.exemplar_dir = f"{data_dir}/exemplar/{model_name}/{distance_metric}/fold{fold}/{phase}"
         self.model_name = model_name
         self.ref_data_dir = ref_data_dir
+        ref_asset_dir = ref_asset_dir or ref_data_dir
 
         if ref_data_dir is not None:
             ref_data = '/'.join(ref_data_dir.replace('/bench_data', '').split('/')[-2:])
@@ -78,8 +85,8 @@ class EGNDataset(STDataset):
             else:
                 self.genes = genes
                 
-            ref_emb_dir = resolve_emb_dir(ref_data_dir)
-            ref_st_dir = resolve_st_dir(ref_data_dir)
+            ref_emb_dir = resolve_emb_dir(ref_asset_dir)
+            ref_st_dir = resolve_st_dir(ref_asset_dir)
             
             adata_dict = {_id: self.load_st(_id, self.genes, st_dir=ref_st_dir, **self.norm_param)
                 for _id in ids_ref}

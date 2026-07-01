@@ -5,7 +5,7 @@ MODEL:
   n_ensemble: 10
   phi2rho_size: 512
   spot_context: spot_subspot_neighbors
-  adapter: default
+  adapter: deepspot
 DATA:
   dataset_name: DeepSpotDataset
   feature_type: all

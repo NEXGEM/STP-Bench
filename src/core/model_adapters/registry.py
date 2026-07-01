@@ -1,5 +1,6 @@
 from .contrastive import ContrastiveAdapter
 from .default import DefaultAdapter
+from .deepspot import DeepSpotAdapter
 from .egn import EGNAdapter
 from .graph import GraphAdapter
 from .sepal import SepalAdapter
@@ -9,6 +10,7 @@ from .triplex import TriplexAdapter
 
 _ADAPTER_TYPES = {
     "default": DefaultAdapter,
+    "deepspot": DeepSpotAdapter,
     "egn": EGNAdapter,
     "triplex": TriplexAdapter,
     "graph": GraphAdapter,

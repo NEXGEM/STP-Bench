@@ -7,7 +7,7 @@ Benchmark suite for spatial gene expression prediction. The user-facing API is
 
 ```bash
 git clone <repo-url>
-cd vst_bench
+cd STP-Bench
 bash scripts/create_env.sh
 source .stpbench/bin/activate
 ```
@@ -17,7 +17,7 @@ source .stpbench/bin/activate
 
 The setup script creates a Python 3.11 virtual environment and installs:
 
-- editable `vst_bench`
+- editable `stp_bench`
 - `torch==2.3.1+cu118`
 - `torchvision==0.18.1+cu118`
 - `torchaudio==2.3.1+cu118`
@@ -164,10 +164,10 @@ stp = STPred(
     models=["StNet"],
     gpu=1,
     log_file="logs/stpred_benchmark.jsonl",
+    repo_root="/path/to/repo", # Path where config files exist
 )
 
-# List available config names.
-# Call on an instance to use the instance's repo_root automatically.
+# List available data configs and the models configured on this STPred instance.
 print(stp.list_data())
 print(stp.list_models())
 
@@ -178,7 +178,7 @@ stp.check(data="ncche/xenium", strict=True)
 **Option A — one-shot benchmark:**
 
 ```python
-result = stp.benchmark(internal_data="ncche/xenium", external_data="hest/lung")
+result = stp.benchmark(internal_data="ncche/xenium", external_data="hest/LUAD")
 ```
 
 **Option B — step by step:**
@@ -187,7 +187,7 @@ result = stp.benchmark(internal_data="ncche/xenium", external_data="hest/lung")
 stp.preprocess(data="ncche/xenium")
 stp.train(data="ncche/xenium")
 int_result = stp.evaluate_internal()
-ext_result = stp.evaluate_external(data="hest/lung")
+ext_result = stp.evaluate_external(data="hest/LUAD")
 
 # Results are dict-compatible and provide convenience helpers.
 print(ext_result.summary())
@@ -209,7 +209,7 @@ stp = STPred.from_run(
     models=["StNet"],
     timestamp="2026-05-18-12-00-00",
 )
-stp.evaluate_external(data="hest/lung")
+stp.evaluate_external(data="hest/LUAD")
 ```
 
 **Persist and restore workflow state:**
@@ -225,9 +225,10 @@ stp2.predict(data="cptac/xenium")
 **Discovery and config helpers:**
 
 ```python
-# On an instance: repo_root is inferred from stp automatically.
+# On an instance: list configured models and inspect configs using stp.repo_root.
 stp.list_data()
 stp.list_models()
+stp.list_available_models()
 stp.describe_data("ncche/xenium")
 stp.describe_model("StNet")
 
@@ -241,7 +242,7 @@ Config names map exactly to YAML files:
 
 ```text
 config/data/ncche/xenium.yaml
-config/data/hest/lung.yaml
+config/data/hest/LUAD.yaml
 config/model/StNet.yaml
 ```
 

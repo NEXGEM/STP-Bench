@@ -58,6 +58,28 @@ class _repomethod:
             return _instance_call
 
 
+class _model_list_method:
+    """Descriptor for list_models.
+
+    Class call: STPred.list_models(repo_root=".") lists available config names.
+    Instance call: stp.list_models() lists models configured on that instance.
+    """
+
+    def __get__(self, obj, objtype=None):
+        if objtype is None:
+            objtype = type(obj)
+        if obj is None:
+            def _class_call(repo_root: str = "."):
+                return objtype._list_named_configs("model", repo_root=repo_root)
+            _class_call.__name__ = "list_models"
+            return _class_call
+
+        def _instance_call():
+            return list(obj.models)
+        _instance_call.__name__ = "list_models"
+        return _instance_call
+
+
 FEATURE_ORDER = ("global", "neighbor", "target")
 REQUIRED_RUNTIME_FIELDS = {
     "GENERAL": ("seed", "log_path"),
@@ -334,6 +356,28 @@ def _run_single_model_action(payload: Dict[str, Any]) -> Dict[str, Any]:
         setup_env(cfg)
 
         if action == "train":
+            if cfg.MODEL.get("skip_train", False):
+                logger.info(
+                    "train_skipped",
+                    model=payload["model"],
+                    data=payload["data"],
+                    reason="MODEL.skip_train=true",
+                )
+                folds = []
+                return {
+                    "model": payload["model"],
+                    "data": payload["data"],
+                    "train_data": payload.get("train_data", payload["data"]),
+                    "action": action,
+                    "config": payload["config_key"],
+                    "gpu_id": payload["gpu_id"],
+                    "timestamp": getattr(cfg.GENERAL, "timestamp", None),
+                    "elapsed_sec": round(time.perf_counter() - action_start, 3),
+                    "artifacts": _collect_run_artifacts(cfg, payload, action, folds),
+                    "manifest": manifest_path,
+                    "skipped": True,
+                    "skip_reason": "MODEL.skip_train=true",
+                }
             folds = list(range(cfg.TRAINING.num_k))
             for fold in folds:
                 with logger.section("fold", action=action, model=payload["model"], data=payload["data"], fold=fold):
@@ -413,10 +457,28 @@ def _run_sepal_train(payload: Dict[str, Any]) -> None:
 def _run_command(command: List[str], cwd: Optional[str] = None, log_path: Optional[str] = None) -> None:
     if log_path:
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
-        with open(log_path, "w") as f:
-            subprocess.run(command, cwd=cwd, stdout=f, stderr=subprocess.STDOUT, text=True, check=True)
+        try:
+            with open(log_path, "w") as f:
+                subprocess.run(command, cwd=cwd, stdout=f, stderr=subprocess.STDOUT, text=True, check=True)
+        except subprocess.CalledProcessError as exc:
+            detail = _tail_nonempty_lines(log_path, max_lines=12)
+            if detail:
+                raise RuntimeError(
+                    f"Command failed with exit status {exc.returncode}: {command}\n"
+                    f"Log tail from {log_path}:\n{detail}"
+                ) from exc
+            raise
     else:
         subprocess.run(command, cwd=cwd, check=True)
+
+
+def _tail_nonempty_lines(path: str, max_lines: int = 12) -> str:
+    try:
+        with open(path, "r") as f:
+            lines = [line.rstrip() for line in f if line.strip()]
+    except OSError:
+        return ""
+    return "\n".join(lines[-max_lines:])
 
 
 def _build_runtime_cfg(payload: Dict[str, Any]):
@@ -456,6 +518,7 @@ def _build_runtime_cfg(payload: Dict[str, Any]):
         timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
         cfg.GENERAL.timestamp = timestamp
         cfg.GENERAL.log_dir = os.path.join(log_dir_parent, timestamp)
+        cfg.MODEL.data_dir = cfg.DATA.get("meta_dir", cfg.DATA.data_dir)
         if not payload["debug"]:
             os.makedirs(cfg.GENERAL.log_dir, exist_ok=True)
             with open(os.path.join(cfg.GENERAL.log_dir, "config.yaml"), "w") as f:
@@ -483,7 +546,8 @@ def _build_runtime_cfg(payload: Dict[str, Any]):
             cfg.DATA.data_dir = current_data.data_dir
             cfg.DATA.output_dir = current_data.output_dir
             cfg.DATA.name = current_data.get("name", payload["data"])
-            cfg.DATA.ref_data_dir = cfg.DATA.train_data_dir
+            cfg.DATA.ref_data_dir = cfg.DATA.get("meta_dir", cfg.DATA.train_data_dir)
+            cfg.DATA.ref_asset_dir = cfg.DATA.train_data_dir
             cfg.DATA.train_data_name = train_data_name
             if current_data.get("wsi_dir", None):
                 cfg.DATA.wsi_dir = current_data.wsi_dir
@@ -493,15 +557,22 @@ def _build_runtime_cfg(payload: Dict[str, Any]):
             os.makedirs(cfg.GENERAL.log_dir, exist_ok=True)
         train_data_dir = cfg.DATA.get("train_data_dir", cfg.DATA.data_dir)
         train_meta_dir = cfg.DATA.get("meta_dir", train_data_dir)
+        cfg.DATA.ref_data_dir = train_meta_dir
+        cfg.DATA.ref_asset_dir = train_data_dir
         gene_path = f"{train_meta_dir}/{cfg.DATA.gene_type}_{cfg.DATA.num_genes}genes.json"
         cfg.MODEL.gene_path = gene_path if os.path.isfile(gene_path) else f"{train_data_dir}/{cfg.DATA.gene_type}_{cfg.DATA.num_genes}genes.json"
+        cfg.MODEL.ref_data_dir = train_meta_dir
         if payload["data"] == train_data:
             cfg.DATA.pred_path = f"{cfg.DATA.output_dir}/{cfg.DATA.name}/{cfg.MODEL.name}"
         else:
             cfg.DATA.pred_path = f"{cfg.DATA.output_dir}/{cfg.DATA.name}/{cfg.MODEL.name}/{train_data}"
 
     elif action == "predict":
-        ckpt_path, fold = _resolve_predict_checkpoint(payload["ckpt_path"], payload.get("fold"))
+        if cfg.MODEL.get("skip_train", False):
+            ckpt_path = None
+            fold = payload.get("fold") or 0
+        else:
+            ckpt_path, fold = _resolve_predict_checkpoint(payload["ckpt_path"], payload.get("fold"))
         cfg.DATA.fold = fold
         cfg.MODEL.ckpt_path = ckpt_path
         config_path = f"{Path(ckpt_path).parent.parent}/config.yaml" if ckpt_path else None
@@ -517,7 +588,8 @@ def _build_runtime_cfg(payload: Dict[str, Any]):
             cfg.GENERAL.gpu = 1
             cfg.GENERAL.gpu_id = payload["gpu_id"]
             cfg.DATA.train_data_dir = _abs_path(repo_root, cfg.DATA.data_dir)
-            cfg.DATA.ref_data_dir = cfg.DATA.train_data_dir
+            cfg.DATA.ref_data_dir = cfg.DATA.get("meta_dir", cfg.DATA.train_data_dir)
+            cfg.DATA.ref_asset_dir = cfg.DATA.train_data_dir
             ref_data_config = cfg.DATA.get("name", payload["data"])
             cfg.DATA.data_dir = current_data.data_dir
             cfg.DATA.output_dir = current_data.output_dir
@@ -529,11 +601,24 @@ def _build_runtime_cfg(payload: Dict[str, Any]):
                 cfg.DATA.test_dataloader = current_data.test_dataloader
         cfg.DATA.fold = fold
         cfg.MODEL.ckpt_path = ckpt_path
-        train_data_dir = cfg.DATA.get("train_data_dir", cfg.DATA.get("ref_data_dir", cfg.DATA.data_dir))
-        train_meta_dir = cfg.DATA.get("meta_dir", train_data_dir)
+        if payload.get("train_data_config"):
+            train_cfg = load_config(payload["train_data_config"])
+            train_data_section = train_cfg.DATA
+            train_data_dir = _abs_path(repo_root, train_data_section.data_dir)
+            train_meta_dir = _abs_path(
+                repo_root,
+                train_data_section.get("meta_dir", train_data_section.data_dir),
+            )
+            cfg.DATA.train_data_name = train_data_section.get("name", train_data)
+        else:
+            train_data_dir = cfg.DATA.get("train_data_dir", cfg.DATA.get("ref_data_dir", cfg.DATA.data_dir))
+            train_meta_dir = cfg.DATA.get("meta_dir", train_data_dir)
+        cfg.DATA.train_data_dir = train_data_dir
+        cfg.DATA.ref_data_dir = train_meta_dir
+        cfg.DATA.ref_asset_dir = train_data_dir
         gene_path = f"{train_meta_dir}/{cfg.DATA.gene_type}_{cfg.DATA.num_genes}genes.json"
         cfg.MODEL.gene_path = gene_path if os.path.isfile(gene_path) else f"{train_data_dir}/{cfg.DATA.gene_type}_{cfg.DATA.num_genes}genes.json"
-        cfg.MODEL.ref_data_dir = cfg.DATA.get("ref_data_dir", cfg.DATA.data_dir)
+        cfg.MODEL.ref_data_dir = train_meta_dir
         cfg.DATA.pred_path = f"{cfg.DATA.output_dir}/{cfg.DATA.name}/{cfg.MODEL.name}/{ref_data_config}"
 
     cfg.MODEL.num_genes = cfg.DATA.get("num_genes", cfg.MODEL.get("num_genes", None))
@@ -637,8 +722,10 @@ class STPred:
         """List data config names available under config/data."""
         return cls._list_named_configs("data", repo_root=repo_root)
 
+    list_models = _model_list_method()
+
     @_repomethod
-    def list_models(cls, repo_root: str = ".") -> List[str]:
+    def list_available_models(cls, repo_root: str = ".") -> List[str]:
         """List model config names available under config/model."""
         return cls._list_named_configs("model", repo_root=repo_root)
 
@@ -912,9 +999,9 @@ class STPred:
             state_key = "internal_data" if mode == "int" else "external_data"
             eval_data = self.state.get(state_key)
         if eval_data is None:
-            raise ValueError(f"{'data' if mode == 'int' else 'external_data'} must be provided for evaluate(mode={mode!r}).")
+            raise ValueError(f"{'data' if mode == 'int' else 'external_data'} must be provided for mode {mode!r}.")
         if train_data is None:
-            raise ValueError("internal training data must be known before evaluate(mode='ext').")
+            raise ValueError("internal training data must be known before evaluating external data.")
         if timestamps is None:
             timestamps = self._timestamps_for_data(train_data)
         if mode == "ext":
@@ -1190,7 +1277,7 @@ class STPred:
             runtime_cfg = self._merged_runtime_config(data_cfg, model_cfg)
             data_section = runtime_cfg.get("DATA", {})
             training_section = runtime_cfg.get("TRAINING", {})
-            patch_encoder = data_section.get("model_name", "cigar")
+            patch_encoder = data_section.get("model_name", "uni_v2")
             feature_type = data_section.get("feature_type", "global")
             features = _feature_set(feature_type)
             feature_requirements[patch_encoder].update(features)
@@ -1283,6 +1370,7 @@ class STPred:
                     external_dir=external_dir,
                     external_asset_dir=external_asset_dir,
                     data_section=data_section,
+                    model_section=model_section,
                     overwrite=bool(base_config.get("overwrite", False)),
                     preprocess_section=preprocess_section,
                 )
@@ -1330,6 +1418,7 @@ class STPred:
         external_dir: Optional[str],
         external_asset_dir: Optional[str],
         data_section: Dict[str, Any],
+        model_section: Dict[str, Any],
         overwrite: bool,
         preprocess_section: Optional[Dict[str, Any]] = None,
     ) -> List[str]:
@@ -1339,7 +1428,8 @@ class STPred:
             "model_name": data_section.get("model_name", "uni_v2"),
             "gene_type": data_section.get("gene_type", "hmhvg"),
             "num_genes": str(data_section.get("num_genes", data_section.get("num_outputs", 200))),
-            "model_path": data_section.get("model_path"),
+            "model_path": data_section.get("model_path", model_section.get("model_path")),
+            "external_meta_dir": _abs_path(self.repo_root, preprocess_section["meta_dir"]) if preprocess_section.get("meta_dir") else None,
             # preprocess-section fields available as auto-fill targets
             "input_dir": preprocess_section.get("input_dir"),
             "platform": preprocess_section.get("platform"),
@@ -1405,6 +1495,20 @@ class STPred:
                     return True
         return False
 
+    def _warn_missing_external_base_artifacts(
+        self,
+        ext_data_cfg: NamedConfig,
+        model_cfgs: Sequence[NamedConfig],
+    ) -> None:
+        """Warn when external prediction may need preprocessing first."""
+        if not self._has_missing_external_base_artifacts(ext_data_cfg, model_cfgs):
+            return
+        self.logger.warning(
+            "external_base_artifacts_missing",
+            data=ext_data_cfg.name,
+            hint="Some external patches/features are missing; run preprocess(data, mode='inference') before predict.",
+        )
+
     def _run_external_model_preprocess(
         self,
         ext_data_cfg: NamedConfig,
@@ -1439,6 +1543,7 @@ class STPred:
                     external_dir=external_dir,
                     external_asset_dir=external_asset_dir,
                     data_section=train_data_section,
+                    model_section=model_section,
                     overwrite=overwrite,
                     preprocess_section=ext_preprocess_section,
                 )
@@ -1581,7 +1686,11 @@ class STPred:
                     training_pipeline = {"kind": training_pipeline}
                 if action == "train" and training_pipeline.get("kind") == "sepal_two_stage":
                     payload.update(self._build_sepal_train_payload(data_cfg, model_cfg, runtime_config))
-                if action == "predict" and not payload["ckpt_path"]:
+                if (
+                    action == "predict"
+                    and not runtime_config.get("MODEL", {}).get("skip_train", False)
+                    and not payload["ckpt_path"]
+                ):
                     timestamp = payload.get("timestamp")
                     if timestamp:
                         payload["ckpt_path"] = os.path.join(
@@ -1717,7 +1826,9 @@ class STPred:
         localnet_runtime_config = self._merged_runtime_config(data_cfg, localnet_cfg)
         data_section = sepal_runtime_config.get("DATA", {})
         model_section = sepal_runtime_config.get("MODEL", {})
-        use_pretrained_emb = self._sepal_uses_pretrained_emb(model_section)
+        use_pretrained_emb = training_pipeline.get("use_pretrained_emb")
+        if use_pretrained_emb is None:
+            use_pretrained_emb = self._sepal_uses_pretrained_emb(model_section)
         dataset_path = _abs_path(self.repo_root, data_section["data_dir"])
         command = [
             sys.executable,
@@ -1728,6 +1839,8 @@ class STPred:
             self._default_ckpt_root(data_cfg.name, localnet_model),
             "--mode",
             "train",
+            "--local_model",
+            training_pipeline.get("local_model", localnet_model),
             "--model_name",
             data_section.get("model_name", "uni_v2"),
             "--gene_type",
@@ -1735,6 +1848,8 @@ class STPred:
             "--num_genes",
             str(data_section.get("num_genes", data_section.get("num_outputs", 200))),
         ]
+        if data_section.get("meta_dir"):
+            command += ["--meta_dir", _abs_path(self.repo_root, data_section["meta_dir"])]
         if data_section.get("cpm", False):
             command.append("--cpm")
         if data_section.get("smooth", False):

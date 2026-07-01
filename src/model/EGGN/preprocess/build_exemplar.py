@@ -9,34 +9,27 @@ from sklearn.neighbors import NearestNeighbors
 import torch
 
 
-def _read_ids(data_dir, phase, fold):
-    split_path = os.path.join(data_dir, "splits", f"{phase}_{fold}.csv")
-    if os.path.isfile(split_path):
-        return pd.read_csv(split_path)
-
-    ids_path = os.path.join(data_dir, "ids.csv")
+def _read_ids(meta_dir, phase, fold):
+    ids_path = os.path.join(meta_dir, "ids.csv")
     ids = pd.read_csv(ids_path)
     fold_col = f"fold_{fold}"
     if fold_col not in ids.columns:
-        raise FileNotFoundError(f"{split_path} not found and {fold_col} is missing from {ids_path}")
+        raise FileNotFoundError(f"{fold_col} is missing from {ids_path}")
     return ids.loc[ids[fold_col].astype(str).str.lower() == phase].reset_index(drop=True)
 
 
-def _num_folds(data_dir):
-    split_dir = os.path.join(data_dir, "splits")
-    if os.path.isdir(split_dir):
-        return len(os.listdir(split_dir)) // 2
-
-    ids_path = os.path.join(data_dir, "ids.csv")
+def _num_folds(meta_dir):
+    ids_path = os.path.join(meta_dir, "ids.csv")
     ids = pd.read_csv(ids_path, nrows=1)
     fold_cols = [col for col in ids.columns if col.startswith("fold_")]
     if not fold_cols:
-        raise FileNotFoundError(f"No splits directory or fold_* columns found in {data_dir}")
+        raise FileNotFoundError(f"No fold_* columns found in {ids_path}")
     return len(fold_cols)
 
 
 def main(
     data_dir,
+    meta_dir=None,
     distance_metric='l1',
     external_dir=None,
     model_name='uni_v2',
@@ -45,10 +38,11 @@ def main(
     external_asset_dir=None,
     overwrite=False,
 ):
+    meta_dir = meta_dir or data_dir
     asset_dir = asset_dir or data_dir
     external_asset_dir = external_asset_dir or external_dir
     emb_dir = f"{asset_dir}/emb/global/features_{model_name}"
-    num_fold = _num_folds(data_dir)
+    num_fold = _num_folds(meta_dir)
 
     if external_dir is not None:
         train_data = '/'.join(data_dir.replace('/bench_data', '').split('/')[-2:])
@@ -65,9 +59,9 @@ def main(
         if fold_idx is not None and fold != fold_idx:
             continue
 
-        train_dataset = _read_ids(data_dir, "train", fold)
+        train_dataset = _read_ids(meta_dir, "train", fold)
         if external_dir is None:
-            test_dataset = _read_ids(data_dir, "test", fold)
+            test_dataset = _read_ids(meta_dir, "test", fold)
         else:
             test_dataset = pd.read_csv(os.path.join(external_dir, "ids.csv"))
 
@@ -193,6 +187,7 @@ def main(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Build exemplar dataset")
     parser.add_argument("--data_dir", type=str, required=True)
+    parser.add_argument("--meta_dir", type=str, default=None)
     parser.add_argument("--distance_metric", type=str, default="l1", choices=["l1", "l2"])
     parser.add_argument("--external_dir", type=str, default=None)
     parser.add_argument("--asset_dir", type=str, default=None)
@@ -204,6 +199,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     main(
         args.data_dir,
+        meta_dir=args.meta_dir,
         distance_metric=args.distance_metric,
         external_dir=args.external_dir,
         model_name=args.model_name,

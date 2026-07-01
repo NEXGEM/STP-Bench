@@ -58,7 +58,7 @@ class STPathInference:
         config.backbone = "spatial_transformer"
     
         model = STFM(config).to(device)
-        model.load_state_dict(torch.load(model_weight_path))
+        model.load_state_dict(torch.load(model_weight_path, map_location=device))
         print(f"Model loaded from {model_weight_path}")
         model.eval()
 
