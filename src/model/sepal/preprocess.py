@@ -31,6 +31,33 @@ from backbone import LocalNet
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from utils.train_utils import normalize_adata
+from model.linear_prob.model import LinearProb
+
+
+def _read_ids(meta_dir, phase, fold):
+    split_path = os.path.join(meta_dir, "splits", f"{phase}_{fold}.csv")
+    if os.path.isfile(split_path):
+        return pd.read_csv(split_path)["sample_id"]
+
+    ids_path = os.path.join(meta_dir, "ids.csv")
+    ids = pd.read_csv(ids_path)
+    fold_col = f"fold_{fold}"
+    if fold_col not in ids.columns:
+        raise FileNotFoundError(f"{split_path} not found and {fold_col} is missing from {ids_path}")
+    return ids.loc[ids[fold_col].astype(str).str.lower() == phase, "sample_id"]
+
+
+def _num_folds(meta_dir):
+    split_dir = os.path.join(meta_dir, "splits")
+    if os.path.isdir(split_dir):
+        return len(glob(f"{split_dir}/train_*.csv"))
+
+    ids_path = os.path.join(meta_dir, "ids.csv")
+    ids = pd.read_csv(ids_path, nrows=1)
+    fold_cols = [col for col in ids.columns if col.startswith("fold_")]
+    if not fold_cols:
+        raise FileNotFoundError(f"No splits directory or fold_* columns found in {meta_dir}")
+    return len(fold_cols)
 
 
 class SepalPreprocess:
@@ -40,7 +67,9 @@ class SepalPreprocess:
                  ckpt_path: str,
                  dataset_path: str, 
                  backbone: str,
+                 local_model: str = 'LocalNet',
                  ref_dataset_path: str = None,
+                 ref_meta_dir: str = None,
                  hex_geometry: bool = True,
                  model_name: str = 'uni_v2',
                  num_genes: int = 200,
@@ -60,10 +89,11 @@ class SepalPreprocess:
         # self.get_ckpt_path(ckpt_path, fold)
         self.ckpt_path = ckpt_path
         self.ref_dataset_path = ref_dataset_path
+        self.ref_meta_dir = ref_meta_dir or ref_dataset_path
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
         emb_dim = self.model_embedding_dims[model_name]
-        self.model = self.load_model(backbone=backbone, emb_dim=emb_dim, num_genes=num_genes, use_pretrained_emb=use_pretrained_emb)
+        self.model = self.load_model(local_model=local_model, backbone=backbone, emb_dim=emb_dim, num_genes=num_genes, use_pretrained_emb=use_pretrained_emb)
         
         self.dataset_path = dataset_path
         self.hex_geometry = hex_geometry
@@ -96,7 +126,7 @@ class SepalPreprocess:
     #         if os.path.exists(ckpt_path):
     #             self.ckpt_path = ckpt_path
         
-    def load_model(self, backbone: str, emb_dim: int = 1536, num_genes: int = 200, use_pretrained_emb=True):
+    def load_model(self, local_model: str, backbone: str, emb_dim: int = 1536, num_genes: int = 200, use_pretrained_emb=True):
         """
         This function loads the model for the SEPAL model.
 
@@ -109,7 +139,13 @@ class SepalPreprocess:
             nn.Module: The loaded model.
         """
         # Load the model
-        model = LocalNet(backbone = backbone, img_embedding_dim=emb_dim, num_genes=num_genes, use_pretrained_emb=use_pretrained_emb)
+        if local_model == "LinearProb":
+            model = LinearProb(img_embedding_dim=emb_dim, num_genes=num_genes)
+            model.use_pretrained_emb = True
+        elif local_model == "LocalNet":
+            model = LocalNet(backbone=backbone, img_embedding_dim=emb_dim, num_genes=num_genes, use_pretrained_emb=use_pretrained_emb)
+        else:
+            raise ValueError(f"Unsupported Sepal local model: {local_model}")
         model = model.to(self.device)
         
         # Load the weights
@@ -141,7 +177,7 @@ class SepalPreprocess:
         # dataloader = DataLoader(adata, batch_size=batch_size, shuffle=False)
         # patch_path = os.path.join(self.dataset_path, 'patches', slide_name)
         
-        if self.model.use_pretrained_emb:
+        if getattr(self.model, "use_pretrained_emb", True):
             emb_path = f"{self.dataset_path}/emb/global/features_{model_name}/{slide_name}.h5"
             
             with h5py.File(emb_path, 'r') as f:
@@ -342,8 +378,9 @@ class SepalPreprocess:
         Returns:
             annData: return adata of st data. 
         """
-        # path = f"{self.st_dir}/{name}.h5ad"
         path = f"{self.dataset_path}/adata/{name}.h5ad"
+        if not os.path.isfile(path):
+            path = f"{self.dataset_path}/st/{name}.h5ad"
         adata = sc.read_h5ad(path)
         
         
@@ -379,8 +416,8 @@ class SepalPreprocess:
         }        
 
         # adata = sc.read_h5ad(f"{self.dataset_path}/adata/{slide_name}.h5ad")
-        if self.ref_dataset_path is not None:
-            gene_path = f"{self.ref_dataset_path}/{gene_type}_{num_genes}genes.json"
+        if self.ref_meta_dir is not None:
+            gene_path = f"{self.ref_meta_dir}/{gene_type}_{num_genes}genes.json"
         else:
             gene_path = f"{self.dataset_path}/{gene_type}_{num_genes}genes.json"
 
@@ -437,7 +474,9 @@ def get_args():
     parser.add_argument('--fold_idx', type=int, default=None, help='Fold index')
     parser.add_argument('--ckpt_path', type=str, required=True, help='Path to the checkpoint file')
     parser.add_argument('--mode', type=str, choices=['train', 'test'], default='train', help='Mode of operation: train or test')
+    parser.add_argument("--meta_dir", type=str, default=None, help="Path to ids.csv and gene lists")
     parser.add_argument("--external_dir", type=str, default=None, help="Path to the data directory")
+    parser.add_argument("--local_model", type=str, default="LocalNet", choices=["LocalNet", "LinearProb"], help="Local model checkpoint type")
     parser.add_argument("--model_name", type=str, default="uni_v2", help="Name of the model")
     parser.add_argument("--gene_type", type=str, default="hmhvg", help="Type of genes to use")
     parser.add_argument("--num_genes", type=int, default=200, help="Number of genes to use")
@@ -451,6 +490,7 @@ def main():
     
     args = get_args()
     dataset_path = args.dataset_path
+    meta_dir = args.meta_dir or dataset_path
     
     external_dir = args.external_dir if args.external_dir else None
     # ref_dataset_path = args.ref_dataset_path
@@ -463,10 +503,13 @@ def main():
     smooth = args.smooth
     use_pretrained_emb = args.use_pretrained_emb
     model_type = 'modified' if use_pretrained_emb else 'original'
+    if args.local_model == "LinearProb":
+        model_type = "linear_prob"
+        use_pretrained_emb = True
     fold_idx = args.fold_idx
     
     if mode == 'train':
-        num_folds = len(glob(f"{dataset_path}/splits/train*.csv"))
+        num_folds = _num_folds(meta_dir)
         for fold in range(num_folds):
             if fold_idx is not None and fold != fold_idx:
                 continue
@@ -478,8 +521,7 @@ def main():
             for phase in ['train', 'test']:
                 if external_dir is None:    
                     print(f"Processing phase {phase}...")
-                    split_path = f"{dataset_path}/splits/{phase}_{fold}.csv"
-                    split = pd.read_csv(split_path)["sample_id"]
+                    split = _read_ids(meta_dir, phase, fold)
                     
                     if cpm:
                         save_dir = f"{dataset_path}/sepal/cpm/{model_type}/fold{fold}/{phase}"
@@ -512,7 +554,9 @@ def main():
                         ckpt_path=ckpt_path,
                         dataset_path=dataset_path if external_dir is None else external_dir,
                         ref_dataset_path=dataset_path,
+                        ref_meta_dir=meta_dir,
                         backbone='ViT',
+                        local_model=args.local_model,
                         model_name=model_name,
                         num_genes=num_genes,
                         use_pretrained_emb=use_pretrained_emb

@@ -3,7 +3,14 @@ GENERAL:
 MODEL:
   model_name: stpath.STPathModule
   fine_tune: false
+  skip_train: true
   adapter: contrastive
+  gene_voc_path: STPath/utils_data/symbol2ensembl.json
+  # STPath requires the pretrained stfm.pth weight.
+  # Relative paths are resolved from src/model/stpath.
+  # Default expected location: src/model/stpath/weight/stfm.pth
+  model_weight_path: weight/stfm.pth
+  device: cpu
 DATA:
   dataset_name: STPathDataset
   model_name: gigapath

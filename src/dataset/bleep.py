@@ -29,6 +29,7 @@ class BleepDataset(STDataset):
                 data_id: str = None,
                 model_name: str = 'uni_v2',
                 ref_data_dir: str = None,
+                ref_asset_dir: str = None,
                 load_level: str = 'patch', # 'patch' or 'slide',
                 ids: list = None
                 ):
@@ -54,6 +55,7 @@ class BleepDataset(STDataset):
         if mode != 'cv' or phase == 'test':
 
             if ref_data_dir is not None:
+                ref_asset_dir = ref_asset_dir or ref_data_dir
                 self.ids_ref = self._get_ids(phase='train', fold=fold, ids_dir=ref_data_dir)
 
                 if not os.path.isfile(f"{ref_data_dir}/{gene_type}_{num_genes}genes.json"):
@@ -71,8 +73,8 @@ class BleepDataset(STDataset):
             spot_expressions_ref = []
             positions_ref = []
             
-            st_dir = resolve_st_dir(ref_data_dir) if ref_data_dir is not None else None
-            emb_dir = resolve_emb_dir(ref_data_dir) if ref_data_dir is not None else None
+            st_dir = resolve_st_dir(ref_asset_dir) if ref_data_dir is not None else None
+            emb_dir = resolve_emb_dir(ref_asset_dir) if ref_data_dir is not None else None
             
             for _id in self.ids_ref:
                 expression = self.load_st(_id, self.genes, st_dir=st_dir, **self.norm_param).X
@@ -88,6 +90,7 @@ class BleepDataset(STDataset):
             self.positions_ref = torch.cat(positions_ref, dim=0)
             
             self.ref_data_dir = ref_data_dir if ref_data_dir is not None else data_dir
+            self.ref_asset_dir = ref_asset_dir if ref_data_dir is not None else data_dir
             self.fold = fold
 
         if mode == 'inference':

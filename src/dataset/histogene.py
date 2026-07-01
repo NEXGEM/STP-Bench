@@ -151,3 +151,29 @@ class HistDataset(STDataset):
                     if distMat[0,res[0][j]]<=2.0:
                         Adj[i][res[0][j]]=1.0
         return Adj
+    
+    def get_normalized_pos(self, pos, rounding_factor=None):
+        W,H = self.infer_grid_size(pos, rounding_factor=rounding_factor)
+
+        pos_min = pos.min(dim=0, keepdim=True)[0]
+        pos_max = pos.max(dim=0, keepdim=True)[0]
+        pos_norm = (pos - pos_min) / (pos_max - pos_min + 1e-5)
+
+        grid_pos = pos_norm * torch.tensor([W - 1, H - 1])
+        grid_pos = grid_pos.round().long()
+        
+        return grid_pos
+
+    def infer_grid_size(self, pos, rounding_factor=None):
+        """
+        pos: (N, 2) tensor
+        """
+        if rounding_factor is None:
+            rounding_factor = self.dynamic_rounding_factor(pos)
+        
+        pos_rounded = (pos / rounding_factor).round() * rounding_factor
+        unique_x = torch.unique(pos_rounded[:, 0])
+        unique_y = torch.unique(pos_rounded[:, 1])
+        W = unique_x.numel()
+        H = unique_y.numel()
+        return (W, H)

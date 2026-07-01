@@ -23,6 +23,15 @@ from preprocess.pipeline.preprocess import (
 )
 
 
+def _wants_feature(feature_type, name: str) -> bool:
+    """Check whether `name` (e.g. 'neighbor') is requested by a feature_type
+    value that may be a single string ('all', 'global', ...) or a list of
+    feature names (e.g. ['global', 'neighbor'])."""
+    if isinstance(feature_type, (list, tuple, set)):
+        return name in feature_type
+    return feature_type in ('all', name)
+
+
 class DataPipeline:
     """
     Unified data processing pipeline for ST.
@@ -108,7 +117,7 @@ class DataPipeline:
         if mode in ['raw', 'stpbench'] and self._has_processed_data() and not self.config['overwrite']:
             print(f"Processed data already found at {self.output_dir}. Skipping raw preprocessing.")
         else:
-            save_neighbors = self.config['feature_type'] in ['all', 'neighbor']
+            save_neighbors = _wants_feature(self.config['feature_type'], 'neighbor')
             preprocess_data(
                 input_dir=self.input_dir,
                 output_dir=self.asset_dir,
@@ -187,7 +196,7 @@ class DataPipeline:
             sample_ids = self._get_sample_ids()
             if feature_type in ['global', 'all']:
                 print("Extracting global features...")
-                extract_features_parallel(
+                ok = extract_features_parallel(
                     wsi_dataroot=self.wsi_dataroot,
                     patch_dataroot=f"{self.asset_dir}/patches",
                     embed_dataroot=f"{self.asset_dir}/emb/global",
@@ -203,10 +212,11 @@ class DataPipeline:
                     sample_ids=sample_ids,
                     mode=self.mode,
                 )
+                self._raise_if_extraction_failed(ok, "global")
             neighbor_patch_dataroot = f"{self.asset_dir}/patches" if self.config['mode'] == 'inference' else f"{self.asset_dir}/patches/neighbor"
             if feature_type in ['neighbor', 'all']:
                 print("Extracting neighbor features...")
-                extract_features_parallel(
+                ok = extract_features_parallel(
                     wsi_dataroot=self.wsi_dataroot,
                     patch_dataroot=neighbor_patch_dataroot,
                     embed_dataroot=f"{self.asset_dir}/emb/neighbor",
@@ -222,11 +232,12 @@ class DataPipeline:
                     sample_ids=sample_ids,
                     mode=self.mode,
                 )
+                self._raise_if_extraction_failed(ok, "neighbor")
                 if self.config.get('save_neighbor_imgs'):
                     self._drop_neighbor_imgs(neighbor_patch_dataroot)
             if feature_type in ['target', 'all']:
                 print("Extracting target features...")
-                extract_features_parallel(
+                ok = extract_features_parallel(
                     wsi_dataroot=self.wsi_dataroot,
                     patch_dataroot=f"{self.asset_dir}/patches",
                     embed_dataroot=f"{self.asset_dir}/emb/target",
@@ -242,11 +253,12 @@ class DataPipeline:
                     sample_ids=sample_ids,
                     mode=self.mode,
                 )
+                self._raise_if_extraction_failed(ok, "target")
         else:
             print("Running feature extraction in single GPU mode...")
             if feature_type in ['global', 'all']:
                 print("Extracting global features...")
-                extract_features_single(
+                ok = extract_features_single(
                     wsi_dataroot=self.wsi_dataroot,
                     patch_dataroot=f"{self.asset_dir}/patches",
                     embed_dataroot=f"{self.asset_dir}/emb/global",
@@ -262,10 +274,11 @@ class DataPipeline:
                     id_path=f"{self.metadata_dir}/ids.csv",
                     mode=self.mode,
                 )
+                self._raise_if_extraction_failed(ok, "global")
             neighbor_patch_dataroot = f"{self.asset_dir}/patches" if self.config['mode'] == 'inference' else f"{self.asset_dir}/patches/neighbor"
             if feature_type in ['neighbor', 'all']:
                 print("Extracting neighbor features...")
-                extract_features_single(
+                ok = extract_features_single(
                     wsi_dataroot=self.wsi_dataroot,
                     patch_dataroot=neighbor_patch_dataroot,
                     embed_dataroot=f"{self.asset_dir}/emb/neighbor",
@@ -281,11 +294,12 @@ class DataPipeline:
                     id_path=f"{self.metadata_dir}/ids.csv",
                     mode=self.mode,
                 )
+                self._raise_if_extraction_failed(ok, "neighbor")
                 if self.config.get('save_neighbor_imgs'):
                     self._drop_neighbor_imgs(neighbor_patch_dataroot)
-            if feature_type in ['target', 'all'] and self.config['mode'] != 'inference':
+            if feature_type in ['target', 'all']:
                 print("Extracting target features...")
-                extract_features_single(
+                ok = extract_features_single(
                     wsi_dataroot=self.wsi_dataroot,
                     patch_dataroot=f"{self.asset_dir}/patches",
                     embed_dataroot=f"{self.asset_dir}/emb/target",
@@ -301,6 +315,12 @@ class DataPipeline:
                     id_path=f"{self.metadata_dir}/ids.csv",
                     mode=self.mode,
                 )
+                self._raise_if_extraction_failed(ok, "target")
+
+    @staticmethod
+    def _raise_if_extraction_failed(ok: bool, feature_type: str) -> None:
+        if not ok:
+            raise RuntimeError(f"Feature extraction failed for feature_type={feature_type}.")
 
     def _drop_neighbor_imgs(self, patch_dir: str):
         """Delete img dataset from neighbor h5 files after feature extraction."""
@@ -338,7 +358,7 @@ class DataPipeline:
         )
         if not has_base:
             return False
-        if self.mode != "inference" and self.config.get("feature_type") in ["all", "neighbor"]:
+        if self.mode != "inference" and _wants_feature(self.config.get("feature_type"), "neighbor"):
             return all(
                 os.path.isfile(f"{self.asset_dir}/patches/neighbor/{sample_id}.h5")
                 or os.path.isfile(f"{self.asset_dir}/patches/neighbor/{sample_id}_patches.h5")

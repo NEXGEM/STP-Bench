@@ -9,20 +9,53 @@ import sys
 import os
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, "../../.."))
 sys.path.append(f"{CURRENT_DIR}/STPath")
 from stpath.app.pipeline.inference import STPathInference
 # import STPathInference
 
 
+def _resolve_stpath_file(path, default_relative_path, label):
+    path = path or default_relative_path
+    path = os.path.expanduser(path)
+    candidates = []
+    if os.path.isabs(path):
+        candidates.append(path)
+    else:
+        candidates.append(os.path.join(CURRENT_DIR, path))
+        candidates.append(os.path.join(REPO_ROOT, path))
+
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            return candidate
+
+    raise FileNotFoundError(
+        f"STPath {label} file is not found. Checked: {candidates}. "
+        "Relative paths are resolved from src/model/stpath. "
+        "For the pretrained STPath weight, download tlhuang/STPath stfm.pth "
+        "and place it at src/model/stpath/weight/stfm.pth, or set MODEL.model_weight_path."
+    )
+
+
 class STPathModule(nn.Module):
     
-    def __init__(self, gene_path=None):
+    def __init__(self, gene_path=None, gene_voc_path=None, model_weight_path=None, device='cpu'):
         super(STPathModule, self).__init__()
+        gene_voc_path = _resolve_stpath_file(
+            gene_voc_path,
+            os.path.join("STPath", "utils_data", "symbol2ensembl.json"),
+            "gene vocabulary",
+        )
+        model_weight_path = _resolve_stpath_file(
+            model_weight_path,
+            os.path.join("weight", "stfm.pth"),
+            "model weight",
+        )
 
         self.agent = STPathInference(
-            gene_voc_path='./src/model/stpath/STPath/utils_data/symbol2ensembl.json',
-            model_weight_path='./src/model/stpath/weight/stfm.pth', 
-            device='cpu'
+            gene_voc_path=gene_voc_path,
+            model_weight_path=model_weight_path,
+            device=device,
         )
 
     def forward(self, img_emb, coord, organ_idx, tech_idx, label=None, **kwargs):

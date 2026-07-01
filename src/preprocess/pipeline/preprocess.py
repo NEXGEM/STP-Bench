@@ -139,8 +139,7 @@ def extract_features_single(
     return_code, output = run_command(cmd, cwd=str(REPO_ROOT))
     
     if return_code != 0:
-        print(f"Error occurred during feature extraction: {output}")
-        return False
+        raise RuntimeError(f"Error occurred during feature extraction:\n{output}")
     
     return True
 
@@ -179,6 +178,7 @@ def extract_features_parallel(
         id_path: Optional path to CSV file with sample IDs to process
     """
     num_gpus = len(gpus)
+    os.makedirs(embed_dataroot, exist_ok=True)
     
     # Split samples across GPUs
     gpu_samples = {i: [] for i in range(num_gpus)}
@@ -223,8 +223,9 @@ def extract_features_parallel(
         processes.append(process)
     
     # Wait for all processes to complete
+    return_codes = []
     for process in processes:
-        process.wait()
+        return_codes.append(process.wait())
         
     # Clean up ID files
     for gpu_idx in gpu_samples:
@@ -232,4 +233,4 @@ def extract_features_parallel(
         if os.path.exists(id_file):
             os.remove(id_file)
     
-    return True
+    return all(code == 0 for code in return_codes)

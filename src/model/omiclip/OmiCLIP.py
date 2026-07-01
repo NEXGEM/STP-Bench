@@ -21,6 +21,8 @@ class OmiCLIP(nn.Module):
     def forward(self, pid, **kwargs):
         # phase = kwargs.get('phase', 'train')
         device = kwargs.get('device', 'cuda')
+        if isinstance(pid, torch.Tensor):
+            pid = int(pid.detach().cpu().view(-1)[0].item())
         
         dataset = kwargs['dataset']
         train_data = dataset.spot_expressions_ref.clone().numpy()
@@ -36,6 +38,8 @@ class OmiCLIP(nn.Module):
                                        'similarity_matrix', 
                                        ref_data_dir,
                                        f'fold{fold}')
+        if not os.path.isdir(similarity_path):
+            similarity_path = os.path.join(data_dir, 'similarity_matrix', f'fold{fold}')
 
         test_id = test_ids[pid]
         image_text_similarity = np.load(f"{similarity_path}/{test_id}.npy")

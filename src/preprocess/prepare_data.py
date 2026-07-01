@@ -30,6 +30,12 @@ def _iter_hest(*args, **kwargs):
             "HEST preprocessing requires the 'hest' package. "
             "Install preprocessing dependencies with: pip install -r requirements/preprocess.txt"
         ) from exc
+    hest_dir = args[0] if args else kwargs.get('hest_dir')
+    if hest_dir:
+        # hest._read_st raises UnboundLocalError for datasets without a
+        # tissue_seg dir (tissue_contours_path is only assigned inside that
+        # branch). An empty dir makes it resolve to None instead of crashing.
+        os.makedirs(os.path.join(hest_dir, 'tissue_seg'), exist_ok=True)
     return iter_hest(*args, **kwargs)
 
 

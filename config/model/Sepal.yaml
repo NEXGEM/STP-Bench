@@ -10,7 +10,9 @@ MODEL:
   adapter: sepal
   training_pipeline:
     kind: sepal_two_stage
-    localnet_model: LocalNet
+    localnet_model: LinearProb
+    local_model: LinearProb
+    use_pretrained_emb: true
 DATA:
   dataset_name: SepalDataset
   datamodule_policy: direct

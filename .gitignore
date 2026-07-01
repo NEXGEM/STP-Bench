@@ -2,5 +2,15 @@ logs/*
 output/*
 local
 
+# Model checkpoints / pretrained weights
+weights/
+**/weight/
+**/weights/
+*.ckpt
+*.pth
+*.pt
+*.safetensors
+*.bin
+
 *.pyc
 __pycache__/
