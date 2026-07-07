@@ -647,8 +647,12 @@ def _resolve_predict_checkpoint(ckpt_path: str, fold: Optional[int]) -> Tuple[st
     if not os.path.isdir(ckpt_path):
         raise ValueError(f"Checkpoint path does not exist: {ckpt_path}")
 
-    timestamp_dirs = sorted(path for path in glob(f"{ckpt_path}/*") if os.path.isdir(path))
-    search_root = timestamp_dirs[-1] if timestamp_dirs else ckpt_path
+    if glob(f"{ckpt_path}/fold*"):
+        # ckpt_path already points at a specific run directory (contains fold* dirs directly).
+        search_root = ckpt_path
+    else:
+        timestamp_dirs = sorted(path for path in glob(f"{ckpt_path}/*") if os.path.isdir(path))
+        search_root = timestamp_dirs[-1] if timestamp_dirs else ckpt_path
     if fold is not None:
         fold_dirs = [f"{search_root}/fold{fold}"]
     else:
