@@ -1,0 +1,16 @@
+MODEL:
+  model_name: deepspotm.DeepSpotMModule
+  fine_tune: false
+  skip_train: true
+  adapter: contrastive
+  # DeepSpotM is a gated HuggingFace repo (huggingface.co/ratschlab/DeepSpotM).
+  # Request access, then `huggingface-cli login`, before running with this
+  # config as-is, or download the repo locally and point repo_id_or_path at
+  # that directory (see src/model/deepspotm/README.md).
+  repo_id_or_path: ratschlab/DeepSpotM
+  source: scgpt
+  device: cpu
+DATA:
+  dataset_name: DeepSpotMDataset
+  feature_type: none
+  use_emb: false
