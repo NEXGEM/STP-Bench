@@ -18,6 +18,7 @@ MODEL:
       input_dir: ~    # auto-filled from preprocess.input_dir
       platform: ~     # auto-filled from preprocess.platform
       mode: ~         # auto-filled from preprocess.mode
+      external_meta_dir: ~   # auto-filled during external evaluate/predict
       levels: "1,2"
 DATA:
   dataset_name: M2OSTDataset
