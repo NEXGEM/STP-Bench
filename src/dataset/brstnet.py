@@ -45,14 +45,13 @@ class BrSTNetDataset(STDataset):
                             load_level=load_level
                         )
     
-        if mode != 'inference':
+        if phase == 'train':
             total_gene_path = glob(f"{self.meta_dir}/total_*.json")[0]
             with open(total_gene_path, 'r') as f:
                 total_genes = json.load(f)['genes']
-            
+
             self.remaining_genes = list(set(total_genes) - set(self.genes))
 
-        if phase == 'train':
             self.adata_aux_dict = {
                 _id: self.load_st(_id, self.remaining_genes, **self.norm_param)
                 for _id in self.ids
