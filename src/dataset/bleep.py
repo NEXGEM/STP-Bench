@@ -39,6 +39,7 @@ class BleepDataset(STDataset):
                                 fold=fold,
                                 data_dir=data_dir,
                                 meta_dir=meta_dir,
+                                ref_data_dir=ref_data_dir,
                                 wsi_dir=wsi_dir,
                                 gene_type=gene_type,
                                 num_genes=num_genes,
