@@ -543,11 +543,16 @@ def _build_runtime_cfg(payload: Dict[str, Any]):
             cfg.GENERAL.gpu_id = payload["gpu_id"]
             train_data_name = cfg.DATA.get("name", train_data)
             cfg.DATA.train_data_dir = _abs_path(repo_root, cfg.DATA.data_dir)
+            # Capture the train run's own meta_dir as ref_data_dir *before*
+            # meta_dir is overwritten below with the eval data's meta_dir —
+            # otherwise external eval silently re-reads the training data's
+            # ids.csv/genes.json instead of the eval dataset's.
+            cfg.DATA.ref_data_dir = cfg.DATA.get("meta_dir", cfg.DATA.train_data_dir)
+            cfg.DATA.ref_asset_dir = cfg.DATA.train_data_dir
             cfg.DATA.data_dir = current_data.data_dir
             cfg.DATA.output_dir = current_data.output_dir
             cfg.DATA.name = current_data.get("name", payload["data"])
-            cfg.DATA.ref_data_dir = cfg.DATA.get("meta_dir", cfg.DATA.train_data_dir)
-            cfg.DATA.ref_asset_dir = cfg.DATA.train_data_dir
+            cfg.DATA.meta_dir = current_data.get("meta_dir", current_data.data_dir)
             cfg.DATA.train_data_name = train_data_name
             if current_data.get("wsi_dir", None):
                 cfg.DATA.wsi_dir = current_data.wsi_dir
@@ -556,7 +561,7 @@ def _build_runtime_cfg(payload: Dict[str, Any]):
         else:
             os.makedirs(cfg.GENERAL.log_dir, exist_ok=True)
         train_data_dir = cfg.DATA.get("train_data_dir", cfg.DATA.data_dir)
-        train_meta_dir = cfg.DATA.get("meta_dir", train_data_dir)
+        train_meta_dir = cfg.DATA.get("ref_data_dir") or cfg.DATA.get("meta_dir", train_data_dir)
         cfg.DATA.ref_data_dir = train_meta_dir
         cfg.DATA.ref_asset_dir = train_data_dir
         gene_path = f"{train_meta_dir}/{cfg.DATA.gene_type}_{cfg.DATA.num_genes}genes.json"
