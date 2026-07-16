@@ -37,6 +37,7 @@ class STDataset(torch.utils.data.Dataset):
                 model_name: str = 'uni_v2',
                 load_level: str = 'patch', # 'patch' or 'slide'
                 use_emb: bool = True,
+                genes_override: list = None,
                 ):
         super(STDataset, self).__init__()
         
@@ -94,32 +95,18 @@ class STDataset(torch.utils.data.Dataset):
                 
             if ref_data_dir is not None:
                 self.ids = self._get_ids()
-                gene_path = self._resolve_gene_path(gene_type, num_genes, ref_data_dir)
+                self.genes = self._resolve_genes(gene_type, num_genes, num_outputs, ref_data_dir, genes_override)
 
-                if os.path.isfile(gene_path):
-                    with open(gene_path, 'r') as f:
-                        genes = json.load(f)['genes']
-                    self.genes = genes[:num_outputs] if gene_type in ['mean', 'hmhvg', 'total'] else genes
-                else:
-                    raise ValueError(f"{gene_path} is not found")
-                
         else:
             if ref_data_dir is not None:
                 self.ids = self._get_ids()
-                gene_path = self._resolve_gene_path(gene_type, num_genes, ref_data_dir)
             else:
                 self.ids = self._get_ids(phase=phase, fold=fold)
-                gene_path = self._resolve_gene_path(gene_type, num_genes)
 
             self.int2id = dict(enumerate(self.ids))
             self.id2int = {v: k for k, v in self.int2id.items()}
 
-            if os.path.isfile(gene_path):
-                with open(gene_path, 'r') as f:
-                    genes = json.load(f)['genes']
-                self.genes = genes[:num_outputs] if gene_type in ['mean', 'hmhvg', 'total'] else genes
-            else:
-                raise ValueError(f"{gene_path} is not found")
+            self.genes = self._resolve_genes(gene_type, num_genes, num_outputs, ref_data_dir, genes_override)
 
         if phase == 'train':
             self.adata_dict = {
@@ -238,6 +225,23 @@ class STDataset(torch.utils.data.Dataset):
             if os.path.isfile(path):
                 return path
         return candidates[0]  # return primary path so the caller can raise a clear error
+
+    def _resolve_genes(self, gene_type: str, num_genes: int, num_outputs: int,
+                        ref_data_dir: str = None, genes_override: list = None) -> list:
+        """Return the target gene list, or raise if the gene JSON is missing.
+
+        genes_override lets the caller (external evaluation with a partial
+        gene-panel overlap) inject an explicit gene list directly, bypassing
+        file-based resolution entirely.
+        """
+        if genes_override is not None:
+            return list(genes_override)
+        gene_path = self._resolve_gene_path(gene_type, num_genes, ref_data_dir)
+        if not os.path.isfile(gene_path):
+            raise ValueError(f"{gene_path} is not found")
+        with open(gene_path, 'r') as f:
+            genes = json.load(f)['genes']
+        return genes[:num_outputs] if gene_type in ['mean', 'hmhvg', 'total'] else genes
 
     def _get_ids(self, phase=None, fold=None, ids_dir=None):
         """Load sample IDs from ids.csv, optionally filtered by fold/phase."""
