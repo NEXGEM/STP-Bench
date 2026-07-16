@@ -220,12 +220,18 @@ class STDataset(torch.utils.data.Dataset):
                 return len(self.int2id)
         
     def _resolve_gene_path(self, gene_type: str, num_genes: int, ref_data_dir: str = None) -> str:
-        """Return the first existing gene JSON path, checking meta_dir → ref_data_dir → data_dir."""
-        candidates = [
-            f"{self.meta_dir}/{gene_type}_{num_genes}genes.json",
-        ]
-        if ref_data_dir and ref_data_dir != self.meta_dir:
+        """Return the first existing gene JSON path, checking ref_data_dir → meta_dir → data_dir.
+
+        ref_data_dir (the training run's own meta_dir) takes priority when set:
+        a model's output columns are fixed to the gene panel it was trained on,
+        so external/eval-time gene resolution must reuse that panel rather than
+        the eval dataset's own independently-computed HVG list, which is
+        typically a different set of genes entirely.
+        """
+        candidates = []
+        if ref_data_dir:
             candidates.append(f"{ref_data_dir}/{gene_type}_{num_genes}genes.json")
+        candidates.append(f"{self.meta_dir}/{gene_type}_{num_genes}genes.json")
         if self.data_dir != self.meta_dir:
             candidates.append(f"{self.data_dir}/{gene_type}_{num_genes}genes.json")
         for path in candidates:
