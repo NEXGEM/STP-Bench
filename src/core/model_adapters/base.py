@@ -20,6 +20,17 @@ class ModelAdapter:
     def forward(self, module, batch, phase):
         if phase == "train":
             return module.model(**batch, phase=phase)
+        if module.config.DATA.get('gene_output_indices') is not None:
+            # External evaluation against a dataset that only measures a
+            # subset of the training gene panel: the label here is already
+            # narrowed to that subset, but most models' forward() computes
+            # its own internal loss against the model's full fixed-width
+            # output, which would crash on the width mismatch before
+            # BaseModule ever gets a chance to slice it (see
+            # BaseModule._slice_gene_outputs). Withhold label so the model
+            # just returns its raw (unsliced) logits; BaseModule computes
+            # loss/metrics itself after slicing.
+            batch = {k: v for k, v in batch.items() if k != "label"}
         return module.model(**batch, phase=phase, device=module.device.type)
 
     def get_label(self, module, batch, outputs, stage):
