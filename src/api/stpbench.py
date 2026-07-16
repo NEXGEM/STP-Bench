@@ -481,6 +481,57 @@ def _tail_nonempty_lines(path: str, max_lines: int = 12) -> str:
     return "\n".join(lines[-max_lines:])
 
 
+def _external_gene_overlap(train_gene_path: str, ext_meta_dir: str, ext_data_dir: str) -> Optional[Dict[str, Any]]:
+    """Determine which of the training gene panel's genes are actually
+    measured in an external dataset.
+
+    A model's output columns are fixed to the gene panel it was trained on,
+    but an external dataset (different platform/experiment) may not measure
+    every one of those genes. Returns None when the full panel is available
+    (no restriction needed) or the check can't be performed; otherwise
+    {'genes': [...], 'indices': [...]} covering just the overlapping subset,
+    in training-panel order — 'indices' are each gene's position in the
+    original training panel, used to slice a fixed-width model output down
+    to the genes that can actually be evaluated.
+    """
+    if not os.path.isfile(train_gene_path):
+        return None
+    import json as _json
+
+    with open(train_gene_path) as f:
+        train_genes = _json.load(f)['genes']
+
+    ids_path = os.path.join(ext_meta_dir, "ids.csv")
+    if not os.path.isfile(ids_path):
+        return None
+    sample_ids = pd.read_csv(ids_path)["sample_id"].dropna().astype(str).tolist()
+
+    from dataset.path_utils import st_dir as _resolve_st_dir
+    st_root = _resolve_st_dir(ext_data_dir)
+
+    measured = None
+    try:
+        import scanpy as sc
+        for name in sample_ids:
+            path = os.path.join(st_root, f"{name}.h5ad")
+            if not os.path.isfile(path):
+                continue
+            var_names = set(sc.read_h5ad(path, backed='r').var_names)
+            measured = var_names if measured is None else (measured & var_names)
+    except Exception:
+        return None
+    if not measured:
+        return None
+
+    overlap_indices = [i for i, g in enumerate(train_genes) if g in measured]
+    if len(overlap_indices) == len(train_genes):
+        return None
+    return {
+        "genes": [train_genes[i] for i in overlap_indices],
+        "indices": overlap_indices,
+    }
+
+
 def _build_runtime_cfg(payload: Dict[str, Any]):
     from addict import Dict
     from core import load_config
@@ -531,6 +582,7 @@ def _build_runtime_cfg(payload: Dict[str, Any]):
         cfg.GENERAL.timestamp = timestamp
         cfg.GENERAL.log_dir = os.path.join(log_dir_parent, timestamp)
         saved_cfg_path = os.path.join(cfg.GENERAL.log_dir, "config.yaml")
+        train_meta_dir_from_ckpt = None
         if os.path.exists(saved_cfg_path):
             current_data = cfg.DATA
             cfg = load_config(saved_cfg_path)
@@ -543,12 +595,13 @@ def _build_runtime_cfg(payload: Dict[str, Any]):
             cfg.GENERAL.gpu_id = payload["gpu_id"]
             train_data_name = cfg.DATA.get("name", train_data)
             cfg.DATA.train_data_dir = _abs_path(repo_root, cfg.DATA.data_dir)
-            # Capture the train run's own meta_dir as ref_data_dir *before*
-            # meta_dir is overwritten below with the eval data's meta_dir —
-            # otherwise external eval silently re-reads the training data's
-            # ids.csv/genes.json instead of the eval dataset's.
-            cfg.DATA.ref_data_dir = cfg.DATA.get("meta_dir", cfg.DATA.train_data_dir)
-            cfg.DATA.ref_asset_dir = cfg.DATA.train_data_dir
+            # Capture the train run's own meta_dir *before* it's overwritten
+            # below with the eval data's meta_dir — otherwise external eval
+            # silently re-reads the training data's ids.csv/genes.json
+            # instead of the eval dataset's. Kept as a local var, not
+            # cfg.DATA.ref_data_dir, so it doesn't leak into the Dataset
+            # constructor for internal eval (see below).
+            train_meta_dir_from_ckpt = cfg.DATA.get("meta_dir", cfg.DATA.train_data_dir)
             cfg.DATA.data_dir = current_data.data_dir
             cfg.DATA.output_dir = current_data.output_dir
             cfg.DATA.name = current_data.get("name", payload["data"])
@@ -561,12 +614,27 @@ def _build_runtime_cfg(payload: Dict[str, Any]):
         else:
             os.makedirs(cfg.GENERAL.log_dir, exist_ok=True)
         train_data_dir = cfg.DATA.get("train_data_dir", cfg.DATA.data_dir)
-        train_meta_dir = cfg.DATA.get("ref_data_dir") or cfg.DATA.get("meta_dir", train_data_dir)
-        cfg.DATA.ref_data_dir = train_meta_dir
-        cfg.DATA.ref_asset_dir = train_data_dir
+        train_meta_dir = train_meta_dir_from_ckpt or cfg.DATA.get("meta_dir", train_data_dir)
+        if payload["data"] != train_data:
+            # External evaluation only: point the dataset at the training
+            # run's own meta_dir/data_dir so it resolves the model's trained
+            # gene panel and loads the (unsplit) external samples. For
+            # internal CV evaluation, ref_data_dir must stay unset —
+            # STDataset only applies its phase/fold test-split filter when
+            # ref_data_dir is None, so setting it here would evaluate every
+            # fold's checkpoint against the *entire* dataset instead of just
+            # its held-out test split.
+            cfg.DATA.ref_data_dir = train_meta_dir
+            cfg.DATA.ref_asset_dir = train_data_dir
         gene_path = f"{train_meta_dir}/{cfg.DATA.gene_type}_{cfg.DATA.num_genes}genes.json"
         cfg.MODEL.gene_path = gene_path if os.path.isfile(gene_path) else f"{train_data_dir}/{cfg.DATA.gene_type}_{cfg.DATA.num_genes}genes.json"
         cfg.MODEL.ref_data_dir = train_meta_dir
+        if payload["data"] != train_data:
+            overlap = _external_gene_overlap(cfg.MODEL.gene_path, cfg.DATA.meta_dir, cfg.DATA.data_dir)
+            if overlap is not None:
+                cfg.DATA.genes_override = overlap["genes"]
+                cfg.DATA.num_outputs = len(overlap["genes"])
+                cfg.DATA.gene_output_indices = overlap["indices"]
         if payload["data"] == train_data:
             cfg.DATA.pred_path = f"{cfg.DATA.output_dir}/{cfg.DATA.name}/{cfg.MODEL.name}"
         else:
@@ -903,7 +971,14 @@ class STPred:
             summary["train"] = self.train(internal_data)
             summary["evaluate_internal"] = self.evaluate(mode="int", data=internal_data)
             if external_data is not None:
-                summary["preprocess_external"] = self.preprocess(external_data, mode="inference", **kwargs)
+                # Use the external dataset's own configured preprocess.mode
+                # (e.g. 'stpbench' for a fully HEST-onboarded labeled dataset)
+                # rather than forcing 'inference' — 'inference' mode is for
+                # genuinely H&E-only, ground-truth-free prediction (stp.predict
+                # on a dataset whose own config sets preprocess.mode: inference),
+                # not for a complete external dataset like hest/LUAD that we
+                # also evaluate against known labels.
+                summary["preprocess_external"] = self.preprocess(external_data, **kwargs)
                 summary["predict_external"] = self.predict(external_data)
                 summary["evaluate_external"] = self.evaluate(mode="ext", external_data=external_data)
             return BenchmarkResult({"steps": summary})
