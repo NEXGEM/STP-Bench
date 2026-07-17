@@ -19,6 +19,7 @@ class SepalDataset(STDataset):
                 data_dir: str,
                 meta_dir: str = None,
                 ref_data_dir: str = None,
+                genes_override: list = None,
                 gene_type: str = 'mean',
                 num_genes: int = 1000,
                 num_outputs: int = 300,
@@ -27,6 +28,8 @@ class SepalDataset(STDataset):
                 smooth: bool = False,
                 data_id: str = None,
                 model_name: str = 'uni_v2',
+                local_model: str = 'LocalNet',
+                use_pretrained_emb: bool = True,
                 load_level: str = 'slide'  # 'patch' or 'slide'
                 ):
         super(SepalDataset, self).__init__(
@@ -35,6 +38,8 @@ class SepalDataset(STDataset):
                                 fold=fold,
                                 data_dir=data_dir,
                                 meta_dir=meta_dir,
+                                ref_data_dir=ref_data_dir,
+                                genes_override=genes_override,
                                 gene_type=gene_type,
                                 num_genes=num_genes,
                                 num_outputs=num_outputs,
@@ -45,10 +50,12 @@ class SepalDataset(STDataset):
                                 model_name=model_name,
                                 load_level=load_level
                                 )
-        if (model_name is None) or (model_name == 'None'):
-            model_type = 'original'
-        else:
-            model_type = 'modified'
+        # Must match src/model/sepal/preprocess.py's model_type derivation
+        # exactly (local_model/use_pretrained_emb, not model_name) — that
+        # script is what actually names the saved graph_dir on disk.
+        model_type = 'modified' if use_pretrained_emb else 'original'
+        if local_model == 'LinearProb':
+            model_type = 'linear_prob'
 
         if cpm:
             if ref_data_dir is not None:

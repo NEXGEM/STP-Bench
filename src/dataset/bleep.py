@@ -30,6 +30,7 @@ class BleepDataset(STDataset):
                 model_name: str = 'uni_v2',
                 ref_data_dir: str = None,
                 ref_asset_dir: str = None,
+                genes_override: list = None,
                 load_level: str = 'patch', # 'patch' or 'slide',
                 ids: list = None
                 ):
@@ -39,6 +40,8 @@ class BleepDataset(STDataset):
                                 fold=fold,
                                 data_dir=data_dir,
                                 meta_dir=meta_dir,
+                                ref_data_dir=ref_data_dir,
+                                genes_override=genes_override,
                                 wsi_dir=wsi_dir,
                                 gene_type=gene_type,
                                 num_genes=num_genes,
@@ -58,26 +61,32 @@ class BleepDataset(STDataset):
                 ref_asset_dir = ref_asset_dir or ref_data_dir
                 self.ids_ref = self._get_ids(phase='train', fold=fold, ids_dir=ref_data_dir)
 
+                # The reference bank (spot_expressions_ref, below) is built
+                # from TRAINING data and feeds architecture with fixed-size
+                # weights tied to the *training* gene panel (e.g. positional
+                # embeddings sized num_genes) — always use the full training
+                # panel for it, never genes_override, which only restricts
+                # the current (external) sample's own label via self.genes.
                 if not os.path.isfile(f"{ref_data_dir}/{gene_type}_{num_genes}genes.json"):
                     raise ValueError(f"{gene_type}_{num_genes}genes.json is not found in {ref_data_dir}")
 
                 with open(f"{ref_data_dir}/{gene_type}_{num_genes}genes.json", 'r') as f:
                     genes = json.load(f)['genes']
-                if gene_type in ['mean', 'hmhvg', 'all']:
-                    self.genes = genes[:num_outputs]
-                else:
-                    self.genes = genes
+                ref_genes = genes[:num_genes] if gene_type in ['mean', 'hmhvg', 'all'] else genes
+
+                self.genes = list(genes_override) if genes_override is not None else ref_genes
             else:
                 self.ids_ref = self._get_ids(phase='train', fold=fold)
+                ref_genes = self.genes
 
             spot_expressions_ref = []
             positions_ref = []
-            
+
             st_dir = resolve_st_dir(ref_asset_dir) if ref_data_dir is not None else None
             emb_dir = resolve_emb_dir(ref_asset_dir) if ref_data_dir is not None else None
-            
+
             for _id in self.ids_ref:
-                expression = self.load_st(_id, self.genes, st_dir=st_dir, **self.norm_param).X
+                expression = self.load_st(_id, ref_genes, st_dir=st_dir, **self.norm_param).X
                 expression = expression.toarray() if sparse.issparse(expression) else expression
                 expression = torch.FloatTensor(expression)
                 spot_expressions_ref.append(expression)

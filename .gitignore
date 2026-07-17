@@ -2,6 +2,8 @@ logs/*
 output/*
 local
 
+/DeepSpotM
+
 # Model checkpoints / pretrained weights
 weights/
 **/weight/

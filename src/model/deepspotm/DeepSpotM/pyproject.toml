@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deepspotm"
+version = "1.0.0"
+description = "Predicts spatial gene expression from histology images using pathology foundation models"
+readme = "README.md"
+# Code is released for non-commercial use only; see LICENSE (PolyForm
+# Noncommercial 1.0.0). The model WEIGHTS carry a separate CC-BY-NC-SA-4.0
+# license — see WEIGHTS_LICENSE.
+license = { text = "PolyForm-Noncommercial-1.0.0" }
+authors = [
+    { name = "Kalin Nonchev", email = "kalin.nonchev@inf.ethz.ch" }
+]
+requires-python = ">=3.9"
+
+dependencies = [
+    "torch>=2.0",
+    "lightning>=2.0",
+    "timm>=0.9",
+    "peft>=0.6",
+    "transformers>=4.43",
+    "safetensors>=0.3",
+    "huggingface_hub>=0.20",
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "pillow>=9.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/ratschlab/DeepSpotM"
+Issues = "https://github.com/ratschlab/DeepSpotM/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+deepspotm = ["assets/*.csv", "assets/*.json"]

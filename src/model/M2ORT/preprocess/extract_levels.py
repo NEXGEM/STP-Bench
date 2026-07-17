@@ -54,6 +54,9 @@ def main():
     parser.add_argument("--data_dir",  required=True,  help="Processed data root (contains patches/)")
     parser.add_argument("--meta_dir",  default=None,   help="Directory containing ids.csv")
     parser.add_argument("--asset_dir", default=None,   help="Alias for data_dir (passed by pipeline)")
+    parser.add_argument("--external_dir", default=None, help="External dataset's data root, when extracting for external evaluate/predict")
+    parser.add_argument("--external_asset_dir", default=None, help="Alias for external_dir")
+    parser.add_argument("--external_meta_dir", default=None, help="External dataset's own meta_dir (contains its ids.csv)")
     parser.add_argument("--input_dir", default=None,   help="Raw data root (WSI / SpaceRanger output per sample)")
     parser.add_argument("--platform",  default="visium", help="ST platform (visium, xenium, hest, …)")
     parser.add_argument("--mode",      default="raw",  choices=["raw", "stpbench", "inference"])
@@ -61,8 +64,14 @@ def main():
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
 
-    data_dir = args.asset_dir or args.data_dir
-    meta_dir = args.meta_dir and os.path.abspath(args.meta_dir)
+    # When called for external evaluate/predict, --data_dir/--asset_dir/--meta_dir
+    # refer to the *training* reference dataset; the samples we actually need to
+    # extract multi-resolution patches for live under --external_dir/
+    # --external_asset_dir/--external_meta_dir instead.
+    external_dir = args.external_asset_dir or args.external_dir
+    data_dir = external_dir or args.asset_dir or args.data_dir
+    meta_dir = args.external_meta_dir or args.meta_dir
+    meta_dir = meta_dir and os.path.abspath(meta_dir)
 
     levels = [int(l.strip()) for l in args.levels.split(",") if l.strip()]
     unknown = [l for l in levels if l not in _LEVEL_TO_MPP]

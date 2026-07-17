@@ -1,0 +1,11 @@
+__pycache__/
+*.egg-info/
+*.pyc
+build/
+dist/
+.ipynb_checkpoints/
+# Large release artifacts live in the HF repo, not git:
+*.safetensors
+*.ckpt
+test_load.py
+HF_README.md

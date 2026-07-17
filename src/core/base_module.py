@@ -89,15 +89,28 @@ class BaseModule(pl.LightningModule):
         super().optimizer_step(*args, **kwargs)
         self.adapter.after_optimizer_step(self)
 
+    def _slice_gene_outputs(self, logits, label):
+        """Slice a fixed-width model output down to the genes actually
+        evaluable for this run (external evaluation against a dataset that
+        doesn't measure the model's full training gene panel — see
+        _external_gene_overlap in api/stpbench.py). No-op when the shapes
+        already match (internal eval, or a zero-shot model whose output
+        already tracks the requested gene list)."""
+        gene_output_indices = self.config.DATA.get('gene_output_indices')
+        if gene_output_indices is not None and logits.shape[-1] != label.shape[-1]:
+            idx = torch.as_tensor(gene_output_indices, dtype=torch.long, device=logits.device)
+            logits = logits.index_select(-1, idx)
+        return logits
+
     def validation_step(self, batch, batch_idx):
         batch = self.adapter.prepare_batch(self, batch, stage='val')
         results_dict = self.adapter.forward(self, batch, phase='val')
         label = self.adapter.get_label(self, batch, results_dict, stage='val')
-        
+
         #---->Loss
         if 'logits' in results_dict:
-            logits = results_dict['logits']
-            
+            logits = self._slice_gene_outputs(results_dict['logits'], label)
+
             val_metric = self.valid_metrics(logits, label)
             val_metric = {k: v.nanmean() if len(v.shape) > 0 else v for k, v in val_metric.items()}
             # val_metric["val_target"] = torch.nan_to_num(val_metric["val_target"], nan=0.0)
@@ -118,7 +131,7 @@ class BaseModule(pl.LightningModule):
             
         
         #---->Loss
-        logits = results_dict['logits']
+        logits = self._slice_gene_outputs(results_dict['logits'], label)
         # label = batch['label']
 
         test_metric = self.test_metrics(logits, label)

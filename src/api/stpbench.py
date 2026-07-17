@@ -481,6 +481,57 @@ def _tail_nonempty_lines(path: str, max_lines: int = 12) -> str:
     return "\n".join(lines[-max_lines:])
 
 
+def _external_gene_overlap(train_gene_path: str, ext_meta_dir: str, ext_data_dir: str) -> Optional[Dict[str, Any]]:
+    """Determine which of the training gene panel's genes are actually
+    measured in an external dataset.
+
+    A model's output columns are fixed to the gene panel it was trained on,
+    but an external dataset (different platform/experiment) may not measure
+    every one of those genes. Returns None when the full panel is available
+    (no restriction needed) or the check can't be performed; otherwise
+    {'genes': [...], 'indices': [...]} covering just the overlapping subset,
+    in training-panel order — 'indices' are each gene's position in the
+    original training panel, used to slice a fixed-width model output down
+    to the genes that can actually be evaluated.
+    """
+    if not os.path.isfile(train_gene_path):
+        return None
+    import json as _json
+
+    with open(train_gene_path) as f:
+        train_genes = _json.load(f)['genes']
+
+    ids_path = os.path.join(ext_meta_dir, "ids.csv")
+    if not os.path.isfile(ids_path):
+        return None
+    sample_ids = pd.read_csv(ids_path)["sample_id"].dropna().astype(str).tolist()
+
+    from dataset.path_utils import st_dir as _resolve_st_dir
+    st_root = _resolve_st_dir(ext_data_dir)
+
+    measured = None
+    try:
+        import scanpy as sc
+        for name in sample_ids:
+            path = os.path.join(st_root, f"{name}.h5ad")
+            if not os.path.isfile(path):
+                continue
+            var_names = set(sc.read_h5ad(path, backed='r').var_names)
+            measured = var_names if measured is None else (measured & var_names)
+    except Exception:
+        return None
+    if not measured:
+        return None
+
+    overlap_indices = [i for i, g in enumerate(train_genes) if g in measured]
+    if len(overlap_indices) == len(train_genes):
+        return None
+    return {
+        "genes": [train_genes[i] for i in overlap_indices],
+        "indices": overlap_indices,
+    }
+
+
 def _build_runtime_cfg(payload: Dict[str, Any]):
     from addict import Dict
     from core import load_config
@@ -531,6 +582,7 @@ def _build_runtime_cfg(payload: Dict[str, Any]):
         cfg.GENERAL.timestamp = timestamp
         cfg.GENERAL.log_dir = os.path.join(log_dir_parent, timestamp)
         saved_cfg_path = os.path.join(cfg.GENERAL.log_dir, "config.yaml")
+        train_meta_dir_from_ckpt = None
         if os.path.exists(saved_cfg_path):
             current_data = cfg.DATA
             cfg = load_config(saved_cfg_path)
@@ -543,11 +595,17 @@ def _build_runtime_cfg(payload: Dict[str, Any]):
             cfg.GENERAL.gpu_id = payload["gpu_id"]
             train_data_name = cfg.DATA.get("name", train_data)
             cfg.DATA.train_data_dir = _abs_path(repo_root, cfg.DATA.data_dir)
+            # Capture the train run's own meta_dir *before* it's overwritten
+            # below with the eval data's meta_dir — otherwise external eval
+            # silently re-reads the training data's ids.csv/genes.json
+            # instead of the eval dataset's. Kept as a local var, not
+            # cfg.DATA.ref_data_dir, so it doesn't leak into the Dataset
+            # constructor for internal eval (see below).
+            train_meta_dir_from_ckpt = cfg.DATA.get("meta_dir", cfg.DATA.train_data_dir)
             cfg.DATA.data_dir = current_data.data_dir
             cfg.DATA.output_dir = current_data.output_dir
             cfg.DATA.name = current_data.get("name", payload["data"])
-            cfg.DATA.ref_data_dir = cfg.DATA.get("meta_dir", cfg.DATA.train_data_dir)
-            cfg.DATA.ref_asset_dir = cfg.DATA.train_data_dir
+            cfg.DATA.meta_dir = current_data.get("meta_dir", current_data.data_dir)
             cfg.DATA.train_data_name = train_data_name
             if current_data.get("wsi_dir", None):
                 cfg.DATA.wsi_dir = current_data.wsi_dir
@@ -556,12 +614,27 @@ def _build_runtime_cfg(payload: Dict[str, Any]):
         else:
             os.makedirs(cfg.GENERAL.log_dir, exist_ok=True)
         train_data_dir = cfg.DATA.get("train_data_dir", cfg.DATA.data_dir)
-        train_meta_dir = cfg.DATA.get("meta_dir", train_data_dir)
-        cfg.DATA.ref_data_dir = train_meta_dir
-        cfg.DATA.ref_asset_dir = train_data_dir
+        train_meta_dir = train_meta_dir_from_ckpt or cfg.DATA.get("meta_dir", train_data_dir)
+        if payload["data"] != train_data:
+            # External evaluation only: point the dataset at the training
+            # run's own meta_dir/data_dir so it resolves the model's trained
+            # gene panel and loads the (unsplit) external samples. For
+            # internal CV evaluation, ref_data_dir must stay unset —
+            # STDataset only applies its phase/fold test-split filter when
+            # ref_data_dir is None, so setting it here would evaluate every
+            # fold's checkpoint against the *entire* dataset instead of just
+            # its held-out test split.
+            cfg.DATA.ref_data_dir = train_meta_dir
+            cfg.DATA.ref_asset_dir = train_data_dir
         gene_path = f"{train_meta_dir}/{cfg.DATA.gene_type}_{cfg.DATA.num_genes}genes.json"
         cfg.MODEL.gene_path = gene_path if os.path.isfile(gene_path) else f"{train_data_dir}/{cfg.DATA.gene_type}_{cfg.DATA.num_genes}genes.json"
         cfg.MODEL.ref_data_dir = train_meta_dir
+        if payload["data"] != train_data:
+            overlap = _external_gene_overlap(cfg.MODEL.gene_path, cfg.DATA.meta_dir, cfg.DATA.data_dir)
+            if overlap is not None:
+                cfg.DATA.genes_override = overlap["genes"]
+                cfg.DATA.num_outputs = len(overlap["genes"])
+                cfg.DATA.gene_output_indices = overlap["indices"]
         if payload["data"] == train_data:
             cfg.DATA.pred_path = f"{cfg.DATA.output_dir}/{cfg.DATA.name}/{cfg.MODEL.name}"
         else:
@@ -898,7 +971,14 @@ class STPred:
             summary["train"] = self.train(internal_data)
             summary["evaluate_internal"] = self.evaluate(mode="int", data=internal_data)
             if external_data is not None:
-                summary["preprocess_external"] = self.preprocess(external_data, mode="inference", **kwargs)
+                # Use the external dataset's own configured preprocess.mode
+                # (e.g. 'stpbench' for a fully HEST-onboarded labeled dataset)
+                # rather than forcing 'inference' — 'inference' mode is for
+                # genuinely H&E-only, ground-truth-free prediction (stp.predict
+                # on a dataset whose own config sets preprocess.mode: inference),
+                # not for a complete external dataset like hest/LUAD that we
+                # also evaluate against known labels.
+                summary["preprocess_external"] = self.preprocess(external_data, **kwargs)
                 summary["predict_external"] = self.predict(external_data)
                 summary["evaluate_external"] = self.evaluate(mode="ext", external_data=external_data)
             return BenchmarkResult({"steps": summary})
@@ -906,9 +986,20 @@ class STPred:
     def preprocess(self, data: str, **overrides) -> Dict[str, Any]:
         """Run one deduplicated preprocessing plan for all configured models."""
 
+        # skip_model_preprocess: used when this data will be used as an
+        # EXTERNAL eval set for a different training run — model-specific
+        # extra_preprocess scripts (EGN/EGGN graph building, OmiCLIP
+        # similarity matrices, ...) behave differently for external data
+        # (train-vs-external namespacing, using the *training* set's key
+        # samples) and must be run later via _run_external_model_preprocess
+        # with that context, not here where `data` is treated as a
+        # standalone/primary dataset.
+        skip_model_preprocess = overrides.pop("skip_model_preprocess", False)
         data_cfg = self._resolve_data(data)
         model_cfgs = self._resolve_models()
-        plan = self._build_preprocess_plan(data_cfg, model_cfgs, overrides)
+        plan = self._build_preprocess_plan(
+            data_cfg, model_cfgs, overrides, skip_model_preprocess=skip_model_preprocess,
+        )
 
         if self.dry_run or overrides.get("dry_run", False):
             self.logger.info(
@@ -1014,7 +1105,7 @@ class STPred:
             train_data_cfg = self._resolve_data(train_data)
             if self._has_missing_external_base_artifacts(ext_data_cfg, model_cfgs):
                 with self.logger.section("preprocess_external", data=ext_data_cfg.name):
-                    self.preprocess(data=eval_data)
+                    self.preprocess(data=eval_data, skip_model_preprocess=True)
             self._run_external_model_preprocess(ext_data_cfg, train_data_cfg, model_cfgs)
         results = self._run_models(
             action="evaluate",
@@ -1267,6 +1358,7 @@ class STPred:
         data_cfg: NamedConfig,
         model_cfgs: Sequence[NamedConfig],
         overrides: Dict[str, Any],
+        skip_model_preprocess: bool = False,
     ) -> Dict[str, Any]:
         preprocess_cfg = dict(data_cfg.config.get("preprocess", {}))
         preprocess_cfg.update(self.preprocess_overrides)
@@ -1331,7 +1423,10 @@ class STPred:
             "base_config": base_config,
             "raw_feature_type": _coalesced_feature_type(required_features),
             "feature_tasks": feature_tasks,
-            "model_preprocess_tasks": self._build_model_preprocess_tasks(data_cfg, model_cfgs, base_config),
+            "model_preprocess_tasks": (
+                [] if skip_model_preprocess
+                else self._build_model_preprocess_tasks(data_cfg, model_cfgs, base_config)
+            ),
             "gpus": self._gpus(),
         }
 
@@ -1524,6 +1619,18 @@ class STPred:
             train_runtime = self._merged_runtime_config(train_data_cfg, model_cfg)
             ext_runtime = self._merged_runtime_config(ext_data_cfg, model_cfg)
             model_section = train_runtime.get("MODEL", {})
+            training_pipeline = model_section.get("training_pipeline", {})
+            if isinstance(training_pipeline, str):
+                training_pipeline = {"kind": training_pipeline}
+            if training_pipeline.get("kind") == "sepal_two_stage":
+                # Sepal isn't in the generic extra_preprocess list — its
+                # external graph-building needs the trained LocalNet/
+                # LinearProb checkpoint (ckpt_path), which the generic
+                # extra_preprocess command builder has no notion of.
+                self._run_sepal_external_preprocess(
+                    ext_data_cfg, train_data_cfg, model_cfg, train_runtime, ext_runtime,
+                )
+                continue
             preprocess_specs = self._model_extra_preprocess_specs(model_section)
             if not preprocess_specs:
                 continue
@@ -1874,6 +1981,89 @@ class STPred:
                 f"{model_cfg.name}_sepal_preprocess.log",
             ),
         }
+
+    def _run_sepal_external_preprocess(
+        self,
+        ext_data_cfg: NamedConfig,
+        train_data_cfg: NamedConfig,
+        model_cfg: NamedConfig,
+        train_runtime: Dict[str, Any],
+        ext_runtime: Dict[str, Any],
+    ) -> None:
+        """Build Sepal's per-slide graph .pt files for the external test set.
+
+        Sepal's own evaluate() action never generates these (unlike EGN/EGGN's
+        generic extra_preprocess) — during training, _run_sepal_train's
+        "preprocess" stage only ever covers the training dataset's own
+        train+test splits. Mirrors _build_sepal_train_payload's command, but
+        with --external_dir/--external_meta_dir pointed at the external data
+        and --mode train restricted to its 'test' phase (see
+        src/model/sepal/preprocess.py's external branch).
+        """
+        training_pipeline = train_runtime.get("MODEL", {}).get("training_pipeline", {})
+        if isinstance(training_pipeline, str):
+            training_pipeline = {"kind": training_pipeline}
+        localnet_model = training_pipeline.get("localnet_model")
+        if not localnet_model:
+            return
+        train_data_section = train_runtime.get("DATA", {})
+        ext_data_section = ext_runtime.get("DATA", {})
+        dataset_path = _abs_path(self.repo_root, train_data_section["data_dir"])
+        external_dir = ext_data_section.get("data_dir")
+        if not external_dir:
+            return
+        external_asset_dir = _abs_path(self.repo_root, external_dir)
+        external_meta_dir = _abs_path(
+            self.repo_root, ext_data_section.get("meta_dir") or external_dir
+        )
+        use_pretrained_emb = training_pipeline.get("use_pretrained_emb")
+        if use_pretrained_emb is None:
+            use_pretrained_emb = self._sepal_uses_pretrained_emb(train_runtime.get("MODEL", {}))
+        command = [
+            sys.executable,
+            "preprocess.py",
+            "--dataset_path",
+            dataset_path,
+            "--ckpt_path",
+            self._default_ckpt_root(train_data_cfg.name, localnet_model),
+            "--mode",
+            "train",
+            "--external_dir",
+            external_asset_dir,
+            "--external_meta_dir",
+            external_meta_dir,
+            "--local_model",
+            training_pipeline.get("local_model", localnet_model),
+            "--model_name",
+            train_data_section.get("model_name", "uni_v2"),
+            "--gene_type",
+            train_data_section.get("gene_type", "hmhvg"),
+            "--num_genes",
+            str(train_data_section.get("num_genes", train_data_section.get("num_outputs", 200))),
+        ]
+        if train_data_section.get("meta_dir"):
+            command += ["--meta_dir", _abs_path(self.repo_root, train_data_section["meta_dir"])]
+        if train_data_section.get("cpm", False):
+            command.append("--cpm")
+        if train_data_section.get("smooth", False):
+            command.append("--smooth")
+        if use_pretrained_emb:
+            command.append("--use_pretrained_emb")
+
+        log_path = os.path.join(
+            self.repo_root, "logs", "_stpbench_commands", ext_data_cfg.name,
+            f"{model_cfg.name}_sepal_preprocess.log",
+        )
+        with self.logger.section(
+            "model_preprocess",
+            data=ext_data_cfg.name,
+            model=model_cfg.name,
+            kind="sepal_preprocess",
+            log_path=log_path,
+        ):
+            _run_command(
+                command, cwd=os.path.join(self.repo_root, "src", "model", "sepal"), log_path=log_path,
+            )
 
     @staticmethod
     def _model_class(model_name: str) -> str:

@@ -1,22 +1,24 @@
-
-
-import os
-
-import json
-import numpy as np
-from scipy import sparse
-import h5py
-import torch
+import torchvision.transforms as transforms
+from torchvision.transforms import InterpolationMode
 
 from dataset.base_dataset import STDataset
-from dataset.path_utils import emb_dir
+
+# Mirrors DeepSpotM's MidnightEncoder normalization and eval transform
+# (src/model/deepspotm/DeepSpotM/src/deepspotm/image_encoder.py::MidnightEncoder,
+# utils.py::get_eval_transforms with center_crop=True).
+_MIDNIGHT_MEAN = (0.5, 0.5, 0.5)
+_MIDNIGHT_STD = (0.5, 0.5, 0.5)
 
 
-class FlowDataset(STDataset):
+class DeepSpotMDataset(STDataset):
+    """Raw-pixel dataset for DeepSpotM.
+
+    DeepSpotM predicts directly from a raw 224x224 tile rather than a
+    precomputed patch embedding, so it needs its own resize/crop/normalize
+    transform instead of STDataset's hardcoded ImageNet one.
     """
-    Dataset for the Stem model which is a diffusion-based gene expression predictor.
-    """
-    def __init__(self, 
+
+    def __init__(self,
                 mode: str,
                 phase: str,
                 fold: int,
@@ -33,8 +35,10 @@ class FlowDataset(STDataset):
                 smooth: bool = False,
                 data_id: str = None,
                 model_name: str = 'uni_v2',
-                load_level: str = 'slide'):
-        super(FlowDataset, self).__init__(
+                load_level: str = 'patch',
+                use_emb: bool = True,
+                ):
+        super(DeepSpotMDataset, self).__init__(
                                 mode=mode,
                                 phase=phase,
                                 fold=fold,
@@ -51,26 +55,11 @@ class FlowDataset(STDataset):
                                 smooth=smooth,
                                 data_id=data_id,
                                 model_name=model_name,
-                                load_level=load_level)
-        
-        # Base directories for embeddings
-        self.emb_dir = emb_dir(data_dir)
-    
-    def __getitem__(self, index):
-        
-        if self.mode == 'inference':
-            
-            img_emb, coords = self.load_emb(self.name, return_crds=True)
-            
-            return {'img_features': img_emb, 'coords': coords}
-        else:
-            name = self.int2id[index]
-            
-            # Load pre-computed embeddings for all spots
-            img_emb, coords = self.load_emb(name, return_crds=True)
-            
-            adata = self.load_st(name, self.genes, **self.norm_param)
-            expression = adata.X.toarray() if sparse.issparse(adata.X) else adata.X
-
-            return {'img_features': img_emb, 'label': torch.FloatTensor(expression), 'coords': coords}
-        
+                                load_level=load_level,
+                                use_emb=use_emb)
+        self.transforms = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Resize(224, interpolation=InterpolationMode.BICUBIC),
+            transforms.CenterCrop(224),
+            transforms.Normalize(mean=_MIDNIGHT_MEAN, std=_MIDNIGHT_STD),
+        ])
