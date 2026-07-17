@@ -70,8 +70,29 @@ def _process_fold(
         query_asset_dir = asset_dir
 
     query_meta_dir = meta_dir if external_dir is None else (external_meta_dir or external_dir)
-    query_samples = _read_ids(query_meta_dir, 'test', fold).sample_id.tolist()
-    save_path = os.path.join(query_asset_dir, 'similarity_matrix', f'fold{fold}')
+    if external_dir is not None:
+        # External evaluation uses ALL of the external dataset's samples for
+        # every trained fold's checkpoint (STDataset does the same — see
+        # ref_data_dir-driven unfiltered loading in base_dataset.py), not a
+        # fold-specific test split of the external data's own (irrelevant)
+        # CV folds.
+        query_samples = pd.read_csv(os.path.join(query_meta_dir, 'ids.csv')).sample_id.tolist()
+    else:
+        query_samples = _read_ids(query_meta_dir, 'test', fold).sample_id.tolist()
+
+    if external_dir is not None:
+        # Namespace by the training run's own meta_dir, matching
+        # EGNDataset's `ref_data` derivation and OmiCLIP.py's forward(),
+        # which already looks up similarity_matrix/{ref_data_dir}/fold{N}
+        # first (falling back to the flat path) — write to the namespaced
+        # location it actually expects, so a similarity matrix built here
+        # (using the EXTERNAL data as query and the TRAINING data's text
+        # embeddings as key) can never collide with a flat-path file built
+        # for `data_dir` used as a standalone/primary dataset.
+        train_data = '/'.join(meta_dir.replace('/bench_data', '').split('/')[-2:])
+        save_path = os.path.join(query_asset_dir, 'similarity_matrix', train_data, f'fold{fold}')
+    else:
+        save_path = os.path.join(query_asset_dir, 'similarity_matrix', f'fold{fold}')
 
     if not overwrite:
         query_samples = [

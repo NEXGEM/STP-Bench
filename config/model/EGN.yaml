@@ -6,6 +6,7 @@ MODEL:
     args:
       model_name: ~
       distance_metric: l1
+      external_meta_dir: ~
   adapter: egn
 DATA:
   dataset_name: EGNDataset
