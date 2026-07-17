@@ -16,6 +16,58 @@ sys.path.insert(0, src_path)
 from src.dataset.egn import EGNDataset
 
 
+def _external_genes_override(meta_dir, asset_dir, external_meta_dir, external_asset_dir, gene_type, num_genes):
+    """Restrict the training gene panel to genes actually measured in the
+    external dataset, mirroring src/api/stpbench.py's _external_gene_overlap.
+
+    This script runs as a standalone subprocess (invoked via extra_preprocess)
+    and never goes through STPBench's runtime-config orchestration, so it
+    can't just read cfg.DATA.genes_override — it has to recompute the overlap
+    itself. Returns None when the full training panel is available in the
+    external data (no restriction needed) or the check can't be performed.
+    """
+    import json
+    train_gene_path = None
+    for candidate_dir in dict.fromkeys([meta_dir, asset_dir]):
+        if not candidate_dir:
+            continue
+        path = os.path.join(candidate_dir, f"{gene_type}_{num_genes}genes.json")
+        if os.path.isfile(path):
+            train_gene_path = path
+            break
+    if train_gene_path is None:
+        return None
+    with open(train_gene_path) as f:
+        train_genes = json.load(f)['genes']
+
+    ids_path = os.path.join(external_meta_dir, "ids.csv")
+    if not os.path.isfile(ids_path):
+        return None
+    sample_ids = pd.read_csv(ids_path)["sample_id"].dropna().astype(str).tolist()
+
+    from dataset.path_utils import st_dir as resolve_st_dir
+    st_root = resolve_st_dir(external_asset_dir)
+
+    measured = None
+    try:
+        import scanpy as sc
+        for name in sample_ids:
+            path = os.path.join(st_root, f"{name}.h5ad")
+            if not os.path.isfile(path):
+                continue
+            var_names = set(sc.read_h5ad(path, backed='r').var_names)
+            measured = var_names if measured is None else (measured & var_names)
+    except Exception:
+        return None
+    if not measured:
+        return None
+
+    overlap = [g for g in train_genes if g in measured]
+    if len(overlap) == len(train_genes):
+        return None
+    return overlap
+
+
 def _num_folds(meta_dir):
     ids_path = os.path.join(meta_dir, "ids.csv")
     ids = pd.read_csv(ids_path, nrows=1)
@@ -141,14 +193,22 @@ def main(
     fold_idx=None,
     asset_dir=None,
     external_asset_dir=None,
+    external_meta_dir=None,
     numk=6,
     meta_dir=None,
 ):
     meta_dir = meta_dir or data_dir
     asset_dir = asset_dir or data_dir
     external_asset_dir = external_asset_dir or external_dir
+    external_meta_dir = external_meta_dir or external_dir
     num_fold = _num_folds(meta_dir)
-    
+
+    genes_override = None
+    if external_dir is not None:
+        genes_override = _external_genes_override(
+            meta_dir, asset_dir, external_meta_dir, external_asset_dir, gene_type, num_genes,
+        )
+
     for fold in range(num_fold):
         if fold_idx is not None and fold != fold_idx:
             continue
@@ -175,7 +235,11 @@ def main(
                 
                 # test_split = os.path.join(external_dir, "ids.csv")
                 # dataset = pd.read_csv(test_split)
-                train_data = '/'.join(data_dir.replace('/bench_data', '').split('/')[-2:])
+                # Namespace by meta_dir, matching EGNDataset's own `ref_data`
+                # derivation (used below via ref_data_dir=meta_dir) — using
+                # data_dir here instead breaks whenever data_dir is a root
+                # shared across every dataset (the documented convention).
+                train_data = '/'.join(meta_dir.replace('/bench_data', '').split('/')[-2:])
                 
                 if cpm:
                     savename = f"{external_asset_dir}/EGGN/cpm/{model_name}/{train_data}/fold{fold}/{phase}"
@@ -183,7 +247,7 @@ def main(
                     savename = f"{external_asset_dir}/EGGN/{model_name}/{train_data}/fold{fold}/{phase}"
                 os.makedirs(savename, exist_ok=True)
                 
-                ref_data_dir = data_dir
+                ref_data_dir = meta_dir
                 # data_dir = external_dir
             
             # temp_arg = namedtuple("arg",["numk","mdim", "index_path", "emb_path", "data"])
@@ -200,7 +264,7 @@ def main(
                 phase=phase,
                 fold=fold,
                 data_dir=data_dir if external_dir is None else external_dir,
-                meta_dir=meta_dir if external_dir is None else None,
+                meta_dir=meta_dir if external_dir is None else external_meta_dir,
                 asset_dir=asset_dir if external_dir is None else external_asset_dir,
                 distance_metric='l1',
                 gene_type=gene_type,
@@ -211,7 +275,8 @@ def main(
                 model_name=model_name,
                 ref_data_dir=ref_data_dir,
                 ref_asset_dir=asset_dir if ref_data_dir is not None else None,
-                load_level='slide' 
+                genes_override=genes_override if ref_data_dir is not None else None,
+                load_level='slide'
             )
             
             loader = torch.utils.data.DataLoader(
@@ -274,6 +339,7 @@ if __name__ == "__main__":
     parser.add_argument("--external_dir", type=str, default=None, help="Path to the data directory")
     parser.add_argument("--asset_dir", type=str, default=None, help="Path to patches, embeddings, ST files, and generated assets")
     parser.add_argument("--external_asset_dir", type=str, default=None, help="Asset directory for external data")
+    parser.add_argument("--external_meta_dir", type=str, default=None, help="Meta directory (ids.csv) for external data")
     parser.add_argument("--model_name", type=str, default='uni_v2', help="Path to the data directory")
     parser.add_argument("--gene_type", type=str, default='hmhvg', help="Type of genes to use")
     parser.add_argument("--num_genes", type=int, default=200, help="Number of genes to use")
@@ -295,15 +361,16 @@ if __name__ == "__main__":
 
     main(
         data_dir,
-        external_dir,
-        model_name,
-        gene_type,
-        num_genes,
-        cpm,
-        overwrite,
-        fold_idx,
-        args.asset_dir,
-        args.external_asset_dir,
-        args.numk,
-        args.meta_dir,
+        external_dir=external_dir,
+        model_name=model_name,
+        gene_type=gene_type,
+        num_genes=num_genes,
+        cpm=cpm,
+        overwrite=overwrite,
+        fold_idx=fold_idx,
+        asset_dir=args.asset_dir,
+        external_asset_dir=args.external_asset_dir,
+        external_meta_dir=args.external_meta_dir,
+        numk=args.numk,
+        meta_dir=args.meta_dir,
     )

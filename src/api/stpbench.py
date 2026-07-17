@@ -986,9 +986,20 @@ class STPred:
     def preprocess(self, data: str, **overrides) -> Dict[str, Any]:
         """Run one deduplicated preprocessing plan for all configured models."""
 
+        # skip_model_preprocess: used when this data will be used as an
+        # EXTERNAL eval set for a different training run — model-specific
+        # extra_preprocess scripts (EGN/EGGN graph building, OmiCLIP
+        # similarity matrices, ...) behave differently for external data
+        # (train-vs-external namespacing, using the *training* set's key
+        # samples) and must be run later via _run_external_model_preprocess
+        # with that context, not here where `data` is treated as a
+        # standalone/primary dataset.
+        skip_model_preprocess = overrides.pop("skip_model_preprocess", False)
         data_cfg = self._resolve_data(data)
         model_cfgs = self._resolve_models()
-        plan = self._build_preprocess_plan(data_cfg, model_cfgs, overrides)
+        plan = self._build_preprocess_plan(
+            data_cfg, model_cfgs, overrides, skip_model_preprocess=skip_model_preprocess,
+        )
 
         if self.dry_run or overrides.get("dry_run", False):
             self.logger.info(
@@ -1094,7 +1105,7 @@ class STPred:
             train_data_cfg = self._resolve_data(train_data)
             if self._has_missing_external_base_artifacts(ext_data_cfg, model_cfgs):
                 with self.logger.section("preprocess_external", data=ext_data_cfg.name):
-                    self.preprocess(data=eval_data)
+                    self.preprocess(data=eval_data, skip_model_preprocess=True)
             self._run_external_model_preprocess(ext_data_cfg, train_data_cfg, model_cfgs)
         results = self._run_models(
             action="evaluate",
@@ -1347,6 +1358,7 @@ class STPred:
         data_cfg: NamedConfig,
         model_cfgs: Sequence[NamedConfig],
         overrides: Dict[str, Any],
+        skip_model_preprocess: bool = False,
     ) -> Dict[str, Any]:
         preprocess_cfg = dict(data_cfg.config.get("preprocess", {}))
         preprocess_cfg.update(self.preprocess_overrides)
@@ -1411,7 +1423,10 @@ class STPred:
             "base_config": base_config,
             "raw_feature_type": _coalesced_feature_type(required_features),
             "feature_tasks": feature_tasks,
-            "model_preprocess_tasks": self._build_model_preprocess_tasks(data_cfg, model_cfgs, base_config),
+            "model_preprocess_tasks": (
+                [] if skip_model_preprocess
+                else self._build_model_preprocess_tasks(data_cfg, model_cfgs, base_config)
+            ),
             "gpus": self._gpus(),
         }
 
@@ -1604,6 +1619,18 @@ class STPred:
             train_runtime = self._merged_runtime_config(train_data_cfg, model_cfg)
             ext_runtime = self._merged_runtime_config(ext_data_cfg, model_cfg)
             model_section = train_runtime.get("MODEL", {})
+            training_pipeline = model_section.get("training_pipeline", {})
+            if isinstance(training_pipeline, str):
+                training_pipeline = {"kind": training_pipeline}
+            if training_pipeline.get("kind") == "sepal_two_stage":
+                # Sepal isn't in the generic extra_preprocess list — its
+                # external graph-building needs the trained LocalNet/
+                # LinearProb checkpoint (ckpt_path), which the generic
+                # extra_preprocess command builder has no notion of.
+                self._run_sepal_external_preprocess(
+                    ext_data_cfg, train_data_cfg, model_cfg, train_runtime, ext_runtime,
+                )
+                continue
             preprocess_specs = self._model_extra_preprocess_specs(model_section)
             if not preprocess_specs:
                 continue
@@ -1954,6 +1981,89 @@ class STPred:
                 f"{model_cfg.name}_sepal_preprocess.log",
             ),
         }
+
+    def _run_sepal_external_preprocess(
+        self,
+        ext_data_cfg: NamedConfig,
+        train_data_cfg: NamedConfig,
+        model_cfg: NamedConfig,
+        train_runtime: Dict[str, Any],
+        ext_runtime: Dict[str, Any],
+    ) -> None:
+        """Build Sepal's per-slide graph .pt files for the external test set.
+
+        Sepal's own evaluate() action never generates these (unlike EGN/EGGN's
+        generic extra_preprocess) — during training, _run_sepal_train's
+        "preprocess" stage only ever covers the training dataset's own
+        train+test splits. Mirrors _build_sepal_train_payload's command, but
+        with --external_dir/--external_meta_dir pointed at the external data
+        and --mode train restricted to its 'test' phase (see
+        src/model/sepal/preprocess.py's external branch).
+        """
+        training_pipeline = train_runtime.get("MODEL", {}).get("training_pipeline", {})
+        if isinstance(training_pipeline, str):
+            training_pipeline = {"kind": training_pipeline}
+        localnet_model = training_pipeline.get("localnet_model")
+        if not localnet_model:
+            return
+        train_data_section = train_runtime.get("DATA", {})
+        ext_data_section = ext_runtime.get("DATA", {})
+        dataset_path = _abs_path(self.repo_root, train_data_section["data_dir"])
+        external_dir = ext_data_section.get("data_dir")
+        if not external_dir:
+            return
+        external_asset_dir = _abs_path(self.repo_root, external_dir)
+        external_meta_dir = _abs_path(
+            self.repo_root, ext_data_section.get("meta_dir") or external_dir
+        )
+        use_pretrained_emb = training_pipeline.get("use_pretrained_emb")
+        if use_pretrained_emb is None:
+            use_pretrained_emb = self._sepal_uses_pretrained_emb(train_runtime.get("MODEL", {}))
+        command = [
+            sys.executable,
+            "preprocess.py",
+            "--dataset_path",
+            dataset_path,
+            "--ckpt_path",
+            self._default_ckpt_root(train_data_cfg.name, localnet_model),
+            "--mode",
+            "train",
+            "--external_dir",
+            external_asset_dir,
+            "--external_meta_dir",
+            external_meta_dir,
+            "--local_model",
+            training_pipeline.get("local_model", localnet_model),
+            "--model_name",
+            train_data_section.get("model_name", "uni_v2"),
+            "--gene_type",
+            train_data_section.get("gene_type", "hmhvg"),
+            "--num_genes",
+            str(train_data_section.get("num_genes", train_data_section.get("num_outputs", 200))),
+        ]
+        if train_data_section.get("meta_dir"):
+            command += ["--meta_dir", _abs_path(self.repo_root, train_data_section["meta_dir"])]
+        if train_data_section.get("cpm", False):
+            command.append("--cpm")
+        if train_data_section.get("smooth", False):
+            command.append("--smooth")
+        if use_pretrained_emb:
+            command.append("--use_pretrained_emb")
+
+        log_path = os.path.join(
+            self.repo_root, "logs", "_stpbench_commands", ext_data_cfg.name,
+            f"{model_cfg.name}_sepal_preprocess.log",
+        )
+        with self.logger.section(
+            "model_preprocess",
+            data=ext_data_cfg.name,
+            model=model_cfg.name,
+            kind="sepal_preprocess",
+            log_path=log_path,
+        ):
+            _run_command(
+                command, cwd=os.path.join(self.repo_root, "src", "model", "sepal"), log_path=log_path,
+            )
 
     @staticmethod
     def _model_class(model_name: str) -> str:
