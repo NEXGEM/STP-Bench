@@ -18,6 +18,7 @@ class BrSTNetDataset(STDataset):
                  data_dir: str,
                  meta_dir: str = None,
                  ref_data_dir: str = None,
+                 genes_override: list = None,
                  gene_type: str = 'var',
                  num_genes: int = 50,
                  num_outputs: int = 50,
@@ -34,6 +35,7 @@ class BrSTNetDataset(STDataset):
                             data_dir=data_dir,
                             meta_dir=meta_dir,
                             ref_data_dir=ref_data_dir,
+                            genes_override=genes_override,
                             gene_type=gene_type,
                             num_genes=num_genes,
                             num_outputs=num_outputs,
@@ -45,13 +47,30 @@ class BrSTNetDataset(STDataset):
                             load_level=load_level
                         )
     
-        if phase == 'train':
-            total_gene_path = glob(f"{self.meta_dir}/total_*.json")[0]
+        if mode != 'inference':
+            # self.remaining_genes backs the auxiliary prediction target used
+            # in both train (adata_aux_dict, below) and test (__getitem__)
+            # phases. Prefer ref_data_dir (the training run's own meta_dir)
+            # as a fallback so external evaluation — whose own meta_dir was
+            # never asked to generate a total_*.json for gene_type=hmhvg —
+            # reuses the training panel instead of raising IndexError.
+            total_gene_path = None
+            for candidate_dir in dict.fromkeys([self.meta_dir, ref_data_dir]):
+                if not candidate_dir:
+                    continue
+                matches = glob(f"{candidate_dir}/total_*.json")
+                if matches:
+                    total_gene_path = matches[0]
+                    break
+            if total_gene_path is None:
+                raise ValueError(f"total_*.json is not found in {self.meta_dir} or {ref_data_dir}")
+
             with open(total_gene_path, 'r') as f:
                 total_genes = json.load(f)['genes']
 
             self.remaining_genes = list(set(total_genes) - set(self.genes))
 
+        if phase == 'train':
             self.adata_aux_dict = {
                 _id: self.load_st(_id, self.remaining_genes, **self.norm_param)
                 for _id in self.ids
