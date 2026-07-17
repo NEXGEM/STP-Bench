@@ -32,6 +32,7 @@ class EGNDataset(STDataset):
                 model_name: str = 'uni_v2',
                 ref_data_dir: str = None,
                 ref_asset_dir: str = None,
+                genes_override: list = None,
                 load_level: str = 'patch'
                 ):
         # Treat same-directory ref as no-ref: internal evaluation always sets
@@ -47,6 +48,7 @@ class EGNDataset(STDataset):
                                 data_dir=data_dir,
                                 meta_dir=meta_dir,
                                 ref_data_dir=ref_data_dir,
+                                genes_override=genes_override,
                                 wsi_dir=wsi_dir,
                                 gene_type=gene_type,
                                 num_genes=num_genes,
@@ -74,21 +76,30 @@ class EGNDataset(STDataset):
             self.exemplar_dir = f"{self.asset_dir}/exemplar/{model_name}/{distance_metric}/{ref_data}/fold{fold}/{phase}"
             
             ids_ref = self._get_ids(phase='train', fold=fold, ids_dir=ref_data_dir)
-            
+
+            # The reference bank (spot_expressions_ref/global_embs_ref) is
+            # built from TRAINING data — always use the full training gene
+            # panel for it, never genes_override, which only restricts the
+            # current (external) sample's own label via self.genes.
             if not os.path.isfile(f"{ref_data_dir}/{gene_type}_{num_genes}genes.json"):
                 raise ValueError(f"{gene_type}_{num_genes}genes.json is not found in {ref_data_dir}")
-            
+
             with open(f"{ref_data_dir}/{gene_type}_{num_genes}genes.json", 'r') as f:
                 genes = json.load(f)['genes']
-            if gene_type in ['mean', 'hmhvg', 'all']:
-                self.genes = genes[:num_outputs]
-            else:
-                self.genes = genes
-                
+            ref_genes = genes[:num_genes] if gene_type in ['mean', 'hmhvg', 'all'] else genes
+
+            self.genes = list(genes_override) if genes_override is not None else ref_genes
+            # get_exemplars_batch pre-allocates exp_exemplars using
+            # self.num_outputs, and exemplar values come from
+            # spot_expressions_ref (built from ref_genes above, the full
+            # training panel) — not from self.genes, which may be narrower
+            # for external evaluation.
+            self.num_outputs = len(ref_genes)
+
             ref_emb_dir = resolve_emb_dir(ref_asset_dir)
             ref_st_dir = resolve_st_dir(ref_asset_dir)
-            
-            adata_dict = {_id: self.load_st(_id, self.genes, st_dir=ref_st_dir, **self.norm_param)
+
+            adata_dict = {_id: self.load_st(_id, ref_genes, st_dir=ref_st_dir, **self.norm_param)
                 for _id in ids_ref}
             self.spot_expressions_ref = {_id: adata.X.toarray() if sparse.issparse(adata.X) else adata.X
                 for _id, adata in adata_dict.items()}
@@ -271,6 +282,7 @@ class EGGNDataset(STDataset):
                 data_dir: str,
                 meta_dir: str = None,
                 ref_data_dir: str = None,
+                genes_override: list = None,
                 gene_type: str = 'mean',
                 num_genes: int = 1000,
                 num_outputs: int = 300,
@@ -288,6 +300,7 @@ class EGGNDataset(STDataset):
                                 data_dir=data_dir,
                                 meta_dir=meta_dir,
                                 ref_data_dir=ref_data_dir,
+                                genes_override=genes_override,
                                 gene_type=gene_type,
                                 num_genes=num_genes,
                                 num_outputs=num_outputs,
