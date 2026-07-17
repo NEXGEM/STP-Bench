@@ -7,12 +7,14 @@ MODEL:
     args:
       model_name: ~
       distance_metric: l1
+      external_meta_dir: ~
   - script: generate_graph.py
     args:
       numk: 6
       model_name: ~
       gene_type: ~
       num_genes: ~
+      external_meta_dir: ~
   adapter: graph
 DATA:
   dataset_name: EGGNDataset
