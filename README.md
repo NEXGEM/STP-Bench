@@ -1,19 +1,31 @@
-# STPBench
+# STP-Bench: A Unified Systematic Benchmark for Virtual Spatial Transcriptomics from Histopathology Images
 
-Benchmark suite for spatial gene expression prediction. The user-facing API is
-`STPred`, which uses simple flat configs under `config/data/` and `config/model/`.
+[![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/)
+[![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/release/python-3110/)
+
+STP-Bench is a benchmark suite for **virtual spatial transcriptomics** — predicting
+spot-level gene expression directly from H&E histopathology images. It provides a
+single, unified `STPred` API to preprocess data, train, and evaluate a growing
+collection of published models under matched **internal cross-validation** and
+**external-dataset** evaluation protocols, so results stay directly comparable
+across models and datasets.
+
+## Updates
+
+- **2026-07-17** — Added **DeepSpotM** as a new zero-shot pretrained model.
+- **2026-05-28** — Initial release.
 
 ## Installation
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/NEXGEM/STP-Bench.git
 cd STP-Bench
 bash scripts/create_env.sh
 source .stpbench/bin/activate
 ```
 
 <details>
-<summary>Installation details (CUDA extras, manual setup, compatibility)</summary>
+<summary><strong>Installation details</strong> (CUDA extras, manual setup, compatibility)</summary>
 
 The setup script creates a Python 3.11 virtual environment and installs:
 
@@ -34,7 +46,7 @@ SKIP_FLASH_ATTN=1 bash scripts/create_env.sh .stpbench
 If you do install `flash-attn`, use the pinned PyTorch/CUDA stack above to
 ensure a compatible prebuilt wheel is available.
 
-### Optional CUDA Extras
+#### Optional CUDA Extras
 
 CUDA dataframe extras are not required for the core benchmark API. Install them
 only on machines where RAPIDS CUDA 12 packages are supported:
@@ -43,7 +55,7 @@ only on machines where RAPIDS CUDA 12 packages are supported:
 INSTALL_CUDA_EXTRAS=1 bash scripts/create_env.sh .stpbench
 ```
 
-### Manual Setup
+#### Manual Setup
 
 Use this only if you do not want the setup script:
 
@@ -72,7 +84,7 @@ uv pip install -r requirements/all.txt
 uv pip install -r requirements/flash-attn.txt --no-build-isolation
 ```
 
-### Compatibility Contract
+#### Compatibility Contract
 
 The supported default environment is:
 
@@ -102,25 +114,26 @@ project. Use the pinned requirements above instead.
 
 ## Benchmark Data
 
-Preprocessed benchmark data (patches, ST expression, embeddings, metadata) is hosted on Hugging Face at [`nexgem/STP-Bench`](https://huggingface.co/datasets/nexgem/STP-Bench).
-
-### Download
-
-Use `snapshot_download` to pull the full dataset or specific subdirectories:
+Preprocessed benchmark data (patches, ST expression, embeddings, metadata) is
+hosted on Hugging Face at [`nexgem/STP-Bench`](https://huggingface.co/datasets/nexgem/STP-Bench).
 
 ```python
 from huggingface_hub import snapshot_download
 
-# Download everything
 local_dir = snapshot_download(
     repo_id="nexgem/STP-Bench",
     repo_type="dataset",
     local_dir="/path/to/stp_bench",
 )
-
 ```
 
-Or via the CLI:
+Set the downloaded directory as `DATA.data_dir` (and `preprocess.output_dir`) in
+your data config.
+
+<details>
+<summary><strong>Data download and layout details</strong> (CLI download, directory structure)</summary>
+
+#### Download via CLI
 
 ```bash
 huggingface-cli download nexgem/STP-Bench \
@@ -128,9 +141,7 @@ huggingface-cli download nexgem/STP-Bench \
     --local-dir /path/to/stp_bench
 ```
 
-### Use as `data_dir`
-
-Set the downloaded directory as `DATA.data_dir` (and `preprocess.output_dir`) in your data config:
+#### Use as `data_dir`
 
 ```yaml
 DATA:
@@ -152,6 +163,8 @@ stp_bench/
 └── wsis/             # whole-slide images (if included)
 ```
 
+</details>
+
 ## Quick Start
 
 > When working directly from the repository without installing the package, use
@@ -163,90 +176,23 @@ from stpbench import STPred
 stp = STPred(
     models=["StNet"],
     gpu=1,
-    log_file="logs/stpred_benchmark.jsonl",
-    repo_root="/path/to/repo", # Path where config files exist
+    repo_root="/path/to/repo",  # path where config files exist
 )
 
-# List available data configs and the models configured on this STPred instance.
-print(stp.list_data())
-print(stp.list_models())
-
-# Validate configs and expected artifacts before a heavy run.
-stp.check(data="ncche/xenium", strict=True)
-```
-
-**Option A — one-shot benchmark:**
-
-```python
+stp.check(data="ncche/xenium", strict=True)          # validate before a heavy run
 result = stp.benchmark(internal_data="ncche/xenium", external_data="hest/LUAD")
+
+print(result.summary())
+result.save("benchmark_results.csv")
 ```
 
-**Option B — step by step:**
+Config names map exactly to YAML files (`config/data/ncche/xenium.yaml`,
+`config/model/StNet.yaml`, ...). If a file is missing, `STPred` raises an error
+with the exact path to create.
 
-```python
-stp.preprocess(data="ncche/xenium")
-stp.train(data="ncche/xenium")
-int_result = stp.evaluate_internal()
-ext_result = stp.evaluate_external(data="hest/LUAD")
-
-# Results are dict-compatible and provide convenience helpers.
-print(ext_result.summary())
-print(ext_result.best_checkpoints())
-ext_result.save("benchmark_results.csv")
-```
-
-**Inference on unlabeled external data:**
-
-```python
-pred_result = stp.predict(data="cptac/xenium")
-```
-
-**Resume a known training run** without keeping the original Python process alive:
-
-```python
-stp = STPred.from_run(
-    data="ncche/xenium",
-    models=["StNet"],
-    timestamp="2026-05-18-12-00-00",
-)
-stp.evaluate_external(data="hest/LUAD")
-```
-
-**Persist and restore workflow state:**
-
-```python
-stp.save_state("logs/my_stpred_state.yaml")
-
-stp2 = STPred(models=["StNet"])
-stp2.load_state("logs/my_stpred_state.yaml")
-stp2.predict(data="cptac/xenium")
-```
-
-**Discovery and config helpers:**
-
-```python
-# On an instance: list configured models and inspect configs using stp.repo_root.
-stp.list_data()
-stp.list_models()
-stp.list_available_models()
-stp.describe_data("ncche/xenium")
-stp.describe_model("StNet")
-
-# As classmethods: pass repo_root explicitly if not running from repo root.
-STPred.list_data(repo_root="/path/to/repo")
-STPred.init_data_config("my_data")    # write an editable template
-STPred.init_model_config("MyModel")
-```
-
-Config names map exactly to YAML files:
-
-```text
-config/data/ncche/xenium.yaml
-config/data/hest/LUAD.yaml
-config/model/StNet.yaml
-```
-
-If a file is missing, `STPred` raises an error with the exact path to create.
+For step-by-step workflows (running each stage separately, resuming a run,
+persisting/restoring state, discovery helpers), see
+**[docs/guide.md — Usage Patterns](docs/guide.md#usage-patterns)**.
 
 ## Python API
 
@@ -319,297 +265,6 @@ Use `STPred.init_data_config("my_data")` to generate an editable template.
 stp = STPred(models=["StNet"], gpu=1, repo_root="/path/to/stp_bench")
 ```
 
-## Adding a New Dataset
-
-Adding a new dataset requires a **data config** and raw input data in the expected directory layout. The pipeline (`stp.preprocess`) handles patch extraction, gene set preparation, cross-validation splits, and feature embedding automatically.
-
-### Step 1 — Prepare raw input data
-
-Organize your raw data so each sample lives in its own subdirectory under a common `input_dir`:
-
-```
-input_dir/
-├── sample_A/          # one directory per sample
-│   ├── *.tiff         # whole-slide image (or .svs, .ndpi, etc.)
-│   └── ...            # SpaceRanger / Xenium output files
-├── sample_B/
-│   └── ...
-└── ...
-```
-
-The supported platform formats follow the conventions of the [HEST](https://github.com/mahmoodlab/HEST) library (Visium SpaceRanger output, Xenium output, etc.).
-
-### Step 2 — Write the data config
-
-Create `config/data/<namespace>/<name>.yaml`. Use `STPred.init_data_config("my_namespace/my_data")` to generate a template, then fill in your paths:
-
-```yaml
-GENERAL:
-  seed: 2021
-  log_path: ./logs
-
-TRAINING:
-  num_k: 5                    # number of cross-validation folds
-  learning_rate: 1.0e-4
-  num_epochs: 200
-  monitor: PearsonCorrCoef
-  mode: max
-  early_stopping: {patience: 20}
-  lr_scheduler: {patience: 5, factor: 0.1}
-
-DATA:
-  data_dir: /path/to/processed_data    # where preprocessed outputs are stored
-  meta_dir: input/my_namespace/my_data # ids.csv and gene lists go here
-  output_dir: output/pred
-  gene_type: hmhvg                     # gene set type (hmhvg, hvg, heg, ...)
-  num_genes: 200
-  num_outputs: 200
-  normalize: true
-  model_name: uni_v2                   # patch encoder for feature extraction
-  tech: Visium                         # ST technology (for metadata)
-  train_dataloader: {batch_size: 128, num_workers: 4, pin_memory: false, shuffle: true}
-  test_dataloader:  {batch_size: 1,   num_workers: 4, pin_memory: false, shuffle: false}
-
-preprocess:
-  mode: raw                            # use raw for new datasets
-  platform: visium                     # visium | xenium | merfish | ...
-  input_dir: /path/to/raw_data         # root of per-sample subdirectories
-  output_dir: /path/to/processed_data  # same as DATA.data_dir
-  meta_dir: input/my_namespace/my_data
-```
-
-### Step 3 — Run preprocessing
-
-```python
-stp = STPred(models=["StNet"])
-stp.preprocess(data="my_namespace/my_data")
-```
-
-This runs four steps in order:
-
-| Step | What it does | Output |
-|---|---|---|
-| Raw preprocessing | Extracts patches and ST expression per sample | `<data_dir>/patches/`, `<data_dir>/st/` |
-| Gene set preparation | Selects highly variable / expressed genes | `<meta_dir>/<gene_type>_<num_genes>genes.json` |
-| CV splits | Assigns samples to train/test folds | `<meta_dir>/ids.csv` (with `fold_*` columns) |
-| Feature extraction | Runs patch encoder on all samples | `<data_dir>/emb/<feature_type>/features_<model_name>/` |
-
-After preprocessing, the directory layout looks like:
-
-```
-data_dir/
-├── patches/
-│   └── <sample_id>.h5
-├── st/
-│   └── <sample_id>.h5ad
-└── emb/
-    └── global/
-        └── features_uni_v2/
-            └── <sample_id>.h5
-
-meta_dir/
-├── ids.csv                       # sample_id, fold_0, fold_1, ...
-└── hmhvg_200genes.json           # selected gene list
-```
-
-### Using benchmark data (stpbench mode)
-
-Datasets already included in STPBench (downloaded from HuggingFace) use `mode: stpbench`.
-This mode reads pre-extracted patches and ST expression from the STPBench data directory
-instead of generating them from raw WSIs. All existing configs under `config/data/` use this mode:
-
-```yaml
-preprocess:
-  mode: stpbench               # for datasets already in STPBench
-  platform: visium
-  input_dir: /path/to/stp_bench   # root of the downloaded HF dataset (contains patches/, st/, wsis/)
-  output_dir: /path/to/stp_bench
-  meta_dir: input/hest/my_cohort
-```
-
-For **new datasets not yet in STPBench**, use `mode: raw` and point `input_dir` at your raw data (per-sample SpaceRanger / Xenium output directories).
-
-### Dry-run check before preprocessing
-
-Use `stp.check()` to verify config and artifact paths before committing to a long run:
-
-```python
-stp.check(data="my_namespace/my_data", strict=False)
-```
-
-## Adding a New Model
-
-Adding a new model requires three files: a **model class**, an **`__init__.py`**, and a **model config**.
-
-### Step 1 — Write the model class
-
-Create `src/model/<module_name>/<module_name>.py`:
-
-```python
-# src/model/my_model/my_model.py
-import torch.nn as nn
-import torch.nn.functional as F
-
-class MyModel(nn.Module):
-    def __init__(self, num_genes: int, hidden_dim: int = 512):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(1536, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, num_genes),
-        )
-
-    def forward(self, img_emb, label=None, **kwargs):
-        output = F.softplus(self.net(img_emb))
-        if label is not None:
-            return {"loss": F.mse_loss(output, label), "logits": output}
-        return {"logits": output}
-```
-
-Two rules to follow:
-- `__init__` parameter names are automatically wired from `MODEL.*` config fields. `num_genes` is always injected from the data config.
-- `forward` must return `{"loss": ..., "logits": ...}` during training and `{"logits": ...}` during inference.
-
-The inputs to `forward` depend on which features the dataset provides:
-
-| `feature_type` | Key passed to `forward` |
-|---|---|
-| `global` / `neighbor` / `target` | `img_emb` — pre-extracted patch embeddings |
-| `none` + `use_emb: false` | `img` — raw patch images |
-| `all` | `img_emb` — all features concatenated |
-
-### Step 2 — Add `__init__.py`
-
-```python
-# src/model/my_model/__init__.py
-from .my_model import MyModel
-```
-
-### Step 3 — Write the model config
-
-Create `config/model/MyModel.yaml`:
-
-```yaml
-MODEL:
-  model_name: my_model.MyModel   # <module_name>.<ClassName>
-  hidden_dim: 512                # any __init__ parameter can be set here
-  adapter: default
-
-DATA:
-  dataset_name: STDataset
-  feature_type: global           # which patch embeddings to load
-```
-
-That's it. `MyModel` will appear in `STPred.list_models()` and is ready to use:
-
-```python
-stp = STPred(models=["MyModel"])
-stp.check(data="ncche/xenium")
-stp.preprocess(data="ncche/xenium")
-stp.train(data="ncche/xenium")
-```
-
-### Common config options
-
-| Scenario | Config setting |
-|---|---|
-| Use pre-extracted patch embeddings | `feature_type: global` (or `neighbor`, `target`, `all`) |
-| Use raw patch images directly | `feature_type: none`, `use_emb: false` |
-| Slide-level batching | `load_level: slide`, `train_dataloader: {batch_size: 1}` |
-| Need extra preprocessing | Add `extra_preprocess:` entries (see below) |
-
-### Adapters
-
-An adapter controls how the training loop interacts with your model — how the batch is prepared, how the loss is computed, and how predictions are collected. Most models can use `adapter: default`.
-
-If your model has a non-standard training loop (e.g. contrastive learning, graph-based batching, or custom prediction aggregation), you can either pick one of the built-in adapters or implement your own.
-
-**Built-in adapters:**
-
-| Name | When to use |
-|---|---|
-| `default` | Standard patch-level regression (most models) |
-| `egn` | EGN / EGGN: exemplar-guided neighborhood models |
-| `graph` | Graph-based models (SGN) |
-| `contrastive` | Contrastive learning objectives |
-| `triplex` | TRIPLEX multi-branch architecture |
-| `sepal` | SEPAL two-stage pipeline |
-| `stem` | STEM architecture |
-
-**Custom adapter:** If none of the above fit, subclass `ModelAdapter` and register it:
-
-```python
-# src/model/my_model/adapter.py
-from core.model_adapters import register_adapter
-from core.model_adapters.base import ModelAdapter
-
-class MyAdapter(ModelAdapter):
-    def prepare_batch(self, module, batch, stage):
-        # customize how the batch is unpacked
-        ...
-
-    def forward(self, module, batch, phase):
-        # customize the forward pass and loss computation
-        ...
-
-register_adapter("my_adapter", MyAdapter)
-```
-
-Import the adapter in your model's `__init__.py` so it registers at load time:
-
-```python
-# src/model/my_model/__init__.py
-from .my_model import MyModel
-from . import adapter  # registers MyAdapter
-```
-
-Then set it in the model config:
-
-```yaml
-MODEL:
-  model_name: my_model.MyModel
-  adapter: my_adapter
-```
-
-### Extra preprocessing
-
-If your model needs preprocessing before training (e.g. graph construction, similarity matrices), place the script in `src/model/<module_name>/preprocess/` and register it in the config:
-
-```yaml
-MODEL:
-  model_name: my_model.MyModel
-  extra_preprocess:
-  - script: build_graph.py      # resolves to src/model/my_model/preprocess/build_graph.py
-    args:
-      num_neighbors: 6
-      model_name: ~             # ~ is auto-filled from the data config's model_name
-  adapter: default
-```
-
-The script must accept at least `--data_dir`. Supporting `--overwrite` lets the pipeline skip already-computed outputs on re-runs.
-
-The following args are auto-filled from the data config's `preprocess` section when set to `~`:
-
-| Arg | Source |
-|---|---|
-| `model_name` | `DATA.model_name` |
-| `gene_type` | `DATA.gene_type` |
-| `num_genes` | `DATA.num_genes` |
-| `input_dir` | `preprocess.input_dir` |
-| `platform` | `preprocess.platform` |
-| `mode` | `preprocess.mode` |
-
-**Model-level preprocess flags** — a model config can also define a `preprocess:` section to set pipeline-level flags. Boolean flags are OR'd across all active models (if any model requires the flag, the pipeline enables it):
-
-```yaml
-MODEL:
-  model_name: my_model.MyModel
-  preprocess:
-    save_neighbor_imgs: true   # merged into the pipeline preprocess config
-  extra_preprocess:
-    ...
-```
-
 ## Outputs
 
 Default locations (can be changed in the data config YAML):
@@ -619,7 +274,43 @@ Default locations (can be changed in the data config YAML):
 - Predictions (eval): `<DATA.output_dir>/<data>/<model>/fold<k>/`
 - Predictions (inference): `<DATA.output_dir>/<data>/<model>/<train_data>/fold<k>/`
 
-## TODO
+## Extending STP-Bench
 
-- [ ] **Slide-level SSIM metric** — add per-slide Structural Similarity Index (SSIM) computation to the evaluation pipeline, aggregated alongside the existing PCC metric in `BenchmarkResult`.
-- [ ] **Xenium data module** — add a new dataset module and corresponding config support for Xenium-format spatial transcriptomics data (sub-cellular resolution, cell-level expression).
+STP-Bench doesn't ship model implementations or raw datasets — you bring your
+own. The easiest way to provide either is to point at wherever it already
+lives:
+
+- **Model code**: a local path to an existing implementation, or a git/
+  GitHub URL to clone. A reference implementation (or its pretrained
+  weights) lets the integration match the real input/output shapes instead
+  of guessing from a paper description.
+- **Raw data**: a local path to the per-sample WSI/ST directories (most
+  datasets are already sitting on the same machine or shared storage —
+  too large to move casually), or a download URL/accession (HuggingFace
+  dataset repo, GEO/SRA/Zenodo, cloud bucket) if it isn't local yet.
+- **Extra preprocessing** (only if the model needs it — graph construction,
+  similarity matrices, custom patch sampling, etc.): STP-Bench does not
+  write this for you either. Bring the preprocessing logic along with the
+  model code (it's usually already part of the reference implementation)
+  so it can be adapted into `src/model/<module_name>/preprocess/`.
+
+With that in hand:
+
+- **Adding a new dataset** — see **[docs/guide.md — Adding a New Dataset](docs/guide.md#adding-a-new-dataset)**.
+- **Adding a new model** — see **[docs/guide.md — Adding a New Model](docs/guide.md#adding-a-new-model)**.
+
+#### For Claude Code
+
+This repository ships two [Claude Code](https://claude.com/claude-code) skills
+under `.claude/skills/` — `add-model` and `add-dataset` — that encode the
+procedures above as agent-actionable checklists grounded in the repository's
+actual internals (adapter registry, `dataset_name` resolution, and known
+failure modes around external evaluation). Each skill starts by asking for
+the model source or raw data location described above. Claude Code discovers
+them automatically; simply ask it to add a new model or dataset and it will
+follow the corresponding skill. This mechanism is specific to Claude Code and
+is not read by other coding agents.
+
+## License
+
+Released under [CC BY-NC-SA 4.0](LICENSE.md) — non-commercial use with attribution, and derivatives must be shared under the same license.
