@@ -897,6 +897,7 @@ class STPred:
             },
             "DATA": {
                 "data_dir": "/path/to/processed_data",
+                "meta_dir": f"input/{name}",
                 "output_dir": "output/pred",
                 "dataset_name": "STDataset",
                 "gene_type": "hmhvg",
@@ -907,13 +908,16 @@ class STPred:
                 "smooth": False,
                 "model_name": "uni_v2",
                 "load_level": "patch",
+                "tech": "Visium",
                 "train_dataloader": {"batch_size": 128, "num_workers": 4, "pin_memory": False, "shuffle": True},
                 "test_dataloader": {"batch_size": 1, "num_workers": 4, "pin_memory": False, "shuffle": False},
             },
             "preprocess": {
                 "mode": "raw",
+                "platform": "visium",
                 "input_dir": "/path/to/raw_data",
                 "output_dir": "/path/to/processed_data",
+                "meta_dir": f"input/{name}",
                 "overwrite": False,
             },
         }
