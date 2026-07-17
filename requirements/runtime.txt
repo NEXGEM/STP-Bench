@@ -4,9 +4,11 @@ openslide-bin>=4.0.0.8
 open_clip_torch==2.26.1
 pandas>=2.0
 peft>=0.6
+positional-encodings>=6.0.3
 pytorch-lightning>=2.0
 scanpy>=1.10
 scipy>=1.10
+squidpy>=1.8.2
 torch-geometric==2.6.1
 torchmetrics>=1.0
 tqdm>=4.0
