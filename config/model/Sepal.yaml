@@ -16,3 +16,8 @@ MODEL:
 DATA:
   dataset_name: SepalDataset
   datamodule_policy: direct
+  # Must match MODEL.training_pipeline.local_model / use_pretrained_emb above —
+  # SepalDataset derives the on-disk graph_dir name from these, and it must
+  # agree with src/model/sepal/preprocess.py's identical derivation.
+  local_model: LinearProb
+  use_pretrained_emb: true

@@ -30,7 +30,7 @@ from positional_encodings.torch_encodings import PositionalEncoding2D
 from backbone import LocalNet
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-from utils.train_utils import normalize_adata
+from core.utils.train_utils import normalize_adata
 from model.linear_prob.model import LinearProb
 
 
@@ -397,32 +397,42 @@ class SepalPreprocess:
     
         return adata
 
-    def prepare_graph(self, 
+    def prepare_graph(self,
                     slide_name: str,
-                    # layer: str = 'y', 
+                    # layer: str = 'y',
                     n_hops: int = 2,
                     model_name='uni_v2',
                     gene_type: str = 'hmhvg',
                     num_genes: int = 200,
                     cpm: bool = False,
-                    smooth: bool = False):
-            
+                    smooth: bool = False,
+                    genes_override: list = None):
+
         # Get dictionary of parameters to get the graphs
         curr_graph_params = {
             'n_hops': n_hops,
             # 'layer': layer
             # 'backbone': backbone,
             # 'model_path': model_path
-        }        
+        }
 
         # adata = sc.read_h5ad(f"{self.dataset_path}/adata/{slide_name}.h5ad")
-        if self.ref_meta_dir is not None:
-            gene_path = f"{self.ref_meta_dir}/{gene_type}_{num_genes}genes.json"
+        if genes_override is not None:
+            # External evaluation: use the STPBench-level gene overlap
+            # (computed once across ALL external samples) instead of
+            # load_st's own per-slide intersection fallback below, which
+            # would otherwise let each slide's label land on a different,
+            # sample-specific gene count — inconsistent with the model
+            # output's fixed gene_output_indices slice.
+            genes = list(genes_override)
         else:
-            gene_path = f"{self.dataset_path}/{gene_type}_{num_genes}genes.json"
+            if self.ref_meta_dir is not None:
+                gene_path = f"{self.ref_meta_dir}/{gene_type}_{num_genes}genes.json"
+            else:
+                gene_path = f"{self.dataset_path}/{gene_type}_{num_genes}genes.json"
 
-        with open(gene_path, 'r') as f:
-            genes = json.load(f)['genes']
+            with open(gene_path, 'r') as f:
+                genes = json.load(f)['genes']
 
         adata = self.load_st(name=slide_name, genes=genes, normalize=True, cpm=cpm, smooth=smooth)
         # pred_path = glob(f"{self.pred_path}/fold*")[0]
@@ -466,6 +476,54 @@ class SepalPreprocess:
         return graph_dict, curr_graph_params
 
 
+def _external_genes_override(meta_dir, dataset_path, external_meta_dir, external_asset_dir, gene_type, num_genes):
+    """Restrict the training gene panel to genes measured in EVERY external
+    sample, mirroring src/api/stpbench.py's _external_gene_overlap.
+
+    This script runs as a standalone subprocess and never goes through
+    STPBench's runtime-config orchestration, so it can't just read
+    cfg.DATA.genes_override — it recomputes the same overlap here. Without
+    this, prepare_graph()'s per-slide load_st() intersection fallback would
+    let each slide land on a different, sample-specific gene count instead
+    of the single consistent panel the model's gene_output_indices slice
+    expects. Returns None when the full training panel is available in
+    every external sample (no restriction needed) or the check can't be
+    performed.
+    """
+    gene_path = f"{meta_dir}/{gene_type}_{num_genes}genes.json"
+    if not os.path.isfile(gene_path):
+        gene_path = f"{dataset_path}/{gene_type}_{num_genes}genes.json"
+    if not os.path.isfile(gene_path):
+        return None
+    with open(gene_path) as f:
+        train_genes = json.load(f)['genes']
+
+    ids_path = os.path.join(external_meta_dir, "ids.csv")
+    if not os.path.isfile(ids_path):
+        return None
+    sample_ids = pd.read_csv(ids_path)["sample_id"].dropna().astype(str).tolist()
+
+    measured = None
+    try:
+        for name in sample_ids:
+            path = os.path.join(external_asset_dir, "st", f"{name}.h5ad")
+            if not os.path.isfile(path):
+                path = os.path.join(external_asset_dir, "adata", f"{name}.h5ad")
+            if not os.path.isfile(path):
+                continue
+            var_names = set(sc.read_h5ad(path, backed='r').var_names)
+            measured = var_names if measured is None else (measured & var_names)
+    except Exception:
+        return None
+    if not measured:
+        return None
+
+    overlap = [g for g in train_genes if g in measured]
+    if len(overlap) == len(train_genes):
+        return None
+    return overlap
+
+
 def get_args():
 
     parser = argparse.ArgumentParser(description='SEPAL Preprocess')
@@ -476,6 +534,7 @@ def get_args():
     parser.add_argument('--mode', type=str, choices=['train', 'test'], default='train', help='Mode of operation: train or test')
     parser.add_argument("--meta_dir", type=str, default=None, help="Path to ids.csv and gene lists")
     parser.add_argument("--external_dir", type=str, default=None, help="Path to the data directory")
+    parser.add_argument("--external_meta_dir", type=str, default=None, help="Path to ids.csv for external data")
     parser.add_argument("--local_model", type=str, default="LocalNet", choices=["LocalNet", "LinearProb"], help="Local model checkpoint type")
     parser.add_argument("--model_name", type=str, default="uni_v2", help="Name of the model")
     parser.add_argument("--gene_type", type=str, default="hmhvg", help="Type of genes to use")
@@ -493,6 +552,7 @@ def main():
     meta_dir = args.meta_dir or dataset_path
     
     external_dir = args.external_dir if args.external_dir else None
+    external_meta_dir = args.external_meta_dir or external_dir
     # ref_dataset_path = args.ref_dataset_path
     ckpt_path = args.ckpt_path
     mode = args.mode
@@ -507,7 +567,13 @@ def main():
         model_type = "linear_prob"
         use_pretrained_emb = True
     fold_idx = args.fold_idx
-    
+
+    genes_override = None
+    if external_dir is not None:
+        genes_override = _external_genes_override(
+            meta_dir, dataset_path, external_meta_dir, external_dir, gene_type, num_genes,
+        )
+
     if mode == 'train':
         num_folds = _num_folds(meta_dir)
         for fold in range(num_folds):
@@ -536,10 +602,15 @@ def main():
                         continue
                     else:
                         print(f"Processing external phase {phase}...")
-                        split_path = f"{external_dir}/ids.csv"
+                        split_path = f"{external_meta_dir}/ids.csv"
                         split = pd.read_csv(split_path)["sample_id"]
-                        
-                        train_data = '/'.join(dataset_path.replace('/bench_data', '').split('/')[-2:])
+
+                        # Namespace by meta_dir, matching SepalDataset's own
+                        # `ref_data` derivation (ref_data_dir.split('/')[-2:])
+                        # — using dataset_path here instead breaks whenever
+                        # dataset_path is a root shared across every dataset
+                        # (the documented convention).
+                        train_data = '/'.join(meta_dir.replace('/bench_data', '').split('/')[-2:])
                         
                         # save_dir = f"{external_dir}/sepal/fold{fold}/{phase}"
                         if cpm:
@@ -570,7 +641,8 @@ def main():
                         gene_type=gene_type,
                         num_genes=num_genes,
                         cpm=cpm,
-                        smooth=smooth
+                        smooth=smooth,
+                        genes_override=genes_override if external_dir is not None else None,
                     )
                     
                     torch.save(graph_dict, f"{save_dir}/{slide_name}.pt")
