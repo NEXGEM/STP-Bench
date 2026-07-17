@@ -167,6 +167,11 @@ stp_bench/
 
 ## Quick Start
 
+> Requires the benchmark data downloaded and `DATA.data_dir` set as above —
+> running this against the bundled `ncche/xenium` / `hest/LUAD` configs
+> as-is (with their placeholder paths) will fail `stp.check(..., strict=True)`
+> with a list of missing files.
+
 > When working directly from the repository without installing the package, use
 > `from api import STPred` with `src/` on `PYTHONPATH`.
 

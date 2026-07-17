@@ -92,16 +92,20 @@ DATA:
   feature_type: global
 ```
 
-Verify: `stp.list_models()` should show `<ClassName>` immediately — adding the
-config is what makes it discoverable.
+Verify: `stp.list_available_models()` should show `<ClassName>` immediately —
+adding the config is what makes it discoverable. (`stp.list_models()` is a
+different method — it only echoes back whatever was passed to
+`STPred(models=[...])`, not what's discoverable on disk; don't confuse the
+two when verifying this step.)
 
 ## Adapters
 
 An adapter controls batch prep / loss computation / prediction aggregation.
-Built-ins (`src/core/model_adapters/registry.py`): `default`, `egn`, `graph`,
-`contrastive`, `triplex`, `sepal`, `stem`. Use `default` unless the training
-loop is genuinely non-standard (contrastive objectives, graph batching,
-multi-stage pipelines).
+Built-ins (`src/core/model_adapters/registry.py`): `default`, `deepspot`,
+`egn`, `graph`, `contrastive`, `triplex`, `sepal`, `stem`. Use `default`
+unless the training loop is genuinely non-standard (contrastive objectives,
+graph batching, multi-stage pipelines, or DeepSpot's chunked slide-level
+batch contract).
 
 Custom adapter — subclass `ModelAdapter`, register with
 `register_adapter(name, cls)`, and **import the module from the model's

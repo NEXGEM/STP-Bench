@@ -268,7 +268,9 @@ DATA:
   feature_type: global           # which patch embeddings to load
 ```
 
-That's it. `MyModel` will appear in `STPred.list_models()` and is ready to use:
+That's it. `MyModel` will appear in `STPred.list_available_models()` — the
+config-discovery view, not `list_models()`, which only echoes back whatever
+was passed to `STPred(models=[...])` — and is ready to use:
 
 ```python
 stp = STPred(models=["MyModel"])
@@ -297,6 +299,7 @@ If your model has a non-standard training loop (e.g. contrastive learning, graph
 | Name | When to use |
 |---|---|
 | `default` | Standard patch-level regression (most models) |
+| `deepspot` | DeepSpot: chunked spot/sub_spot/neighbor batch contract |
 | `egn` | EGN / EGGN: exemplar-guided neighborhood models |
 | `graph` | Graph-based models (SGN) |
 | `contrastive` | Contrastive learning objectives |
