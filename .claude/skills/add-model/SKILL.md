@@ -187,3 +187,10 @@ external-eval path has repeatedly caught bugs (gene-panel mismatches,
 reference-bank corruption, unforwarded kwargs, stale/incompletely-written
 caches) that internal-only testing never exercises. Don't consider a new
 model done until it has been run through both.
+
+If the model uses the default `feature_type` mechanism (no `extra_preprocess`),
+also sanity-check `stp.predict()` directly on a WSI file — see
+[docs/guide.md — Usage Patterns](../../../docs/guide.md#usage-patterns) for
+the call shape. Models with `extra_preprocess` (graph/reference-bank builders)
+aren't wired to WSI-only assets yet and only support the named-config predict
+path.

@@ -38,6 +38,46 @@ ext_result.save("benchmark_results.csv")
 pred_result = stp.predict(data="cptac/xenium")
 ```
 
+**Easy inference directly on a WSI (no data config to write):**
+
+`data` also accepts a filesystem path instead of a named config — STP-Bench
+extracts patches and features for you. Non-config targets require
+`output_dir` (where extracted patches/embeddings/predictions are written)
+and a resolvable checkpoint (`ckpt_path`, or `train_data`/a prior
+`train()`/`from_run()` call):
+
+```python
+# A single slide file
+stp.predict(
+    data="/path/to/slide.svs",
+    output_dir="/path/to/output",
+    train_data="ncche/xenium",   # or ckpt_path="/path/to/checkpoint.ckpt"
+)
+
+# A directory of slides -- one prediction per slide, same output_dir
+stp.predict(data="/path/to/slides_dir/", output_dir="/path/to/output", train_data="ncche/xenium")
+
+# Already-preprocessed assets (a directory containing patches/*.h5) --
+# output_dir here is just where predictions are written, not re-extracted into
+stp.predict(data="/path/to/existing_assets", output_dir="/path/to/predictions", train_data="ncche/xenium")
+
+# Restrict output to specific genes; names not in the training panel are
+# dropped with a warning rather than failing the whole run
+stp.predict(
+    data="/path/to/slide.svs", output_dir="/path/to/output", train_data="ncche/xenium",
+    gene_list=["GENE1", "GENE2"],
+)
+
+# Per-call model override -- doesn't mutate stp.list_models()
+stp.predict(data="/path/to/slide.svs", output_dir="/path/to/output", train_data="ncche/xenium", models=["TRIPLEX"])
+```
+
+The output `.h5ad` includes `obsm['spatial']` patch coordinates. This path
+works for models using the default `feature_type` mechanism (StNet, TRIPLEX,
+DeepSpot, HisToGene, DeepSpotM, ...); models with `extra_preprocess`
+(EGN, EGGN, Sepal, OmiCLIP, M2ORT, M2OST) and SGN/Stem still require the
+named-config path above.
+
 **Resume a known training run** without keeping the original Python process alive:
 
 ```python

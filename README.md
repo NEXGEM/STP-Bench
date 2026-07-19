@@ -208,7 +208,7 @@ Primary workflow methods:
 - `stp.train(data=None)`: train all selected models.
 - `stp.evaluate_internal(data=None)`: evaluate internal test folds.
 - `stp.evaluate_external(data, train_data=None)`: evaluate external labeled data using an internal training run. If the external dataset is missing base artifacts (patches/embeddings), `preprocess()` is triggered automatically before evaluation.
-- `stp.predict(data, train_data=None)`: predict on slide-image-only external data.
+- `stp.predict(data, train_data=None, ckpt_path=None, models=None, output_dir=None, gene_list=None, wsi_dir=None, overwrite=False)`: predict on slide-image-only data. `data` accepts a named config, a single WSI file, a directory of WSI files (one prediction per slide), or an already-preprocessed asset directory — the latter three require `output_dir` and run patch extraction/feature embedding automatically. See [docs/guide.md — Usage Patterns](docs/guide.md#usage-patterns) for examples.
 - `stp.check(data, strict=False)`: validate configs and expected artifacts before a heavy run.
 
 Benchmark logging is enabled by default and uses a consistent `[STPBench]` line
@@ -278,6 +278,11 @@ Default locations (can be changed in the data config YAML):
 - Checkpoints: `<GENERAL.log_path>/<data>/<model>/<timestamp>/fold<k>/`
 - Predictions (eval): `<DATA.output_dir>/<data>/<model>/fold<k>/`
 - Predictions (inference): `<DATA.output_dir>/<data>/<model>/<train_data>/fold<k>/`
+
+For a WSI-path `predict()` call (see [docs/guide.md](docs/guide.md#usage-patterns)),
+`output_dir` doubles as the patch/embedding root: patches/embeddings land at
+`<output_dir>/patches/`, `<output_dir>/emb/`, and predictions nest under
+`<output_dir>/<data>/<model>/<train_data>/fold<k>/` as above.
 
 ## Extending STP-Bench
 
