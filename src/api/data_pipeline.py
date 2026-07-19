@@ -98,6 +98,14 @@ class DataPipeline:
         mode = self.config['mode']
         self.mode = mode
         self.asset_dir = self.output_dir
+        # 'inference' mode never extracts patches — they already exist under
+        # input_dir (which may be a separate, read-only asset directory from
+        # output_dir; see STPred._materialize_wsi_data_config's asset_dir
+        # kind). Every other mode extracts patches INTO asset_dir itself, so
+        # that's where they're read back from. Feature extraction reads
+        # patches from patch_source_dir but still writes embeddings under
+        # asset_dir (writable) regardless of mode.
+        self.patch_source_dir = self.input_dir if mode == 'inference' else self.asset_dir
         self.metadata_dir = self._abs(self.config.get('meta_dir')) or self.output_dir
         self.wsi_dataroot = f"{self.input_dir}/wsis" if mode == 'stpbench' else self.input_dir
         self.dirs = setup_paths(self.output_dir)
@@ -114,7 +122,7 @@ class DataPipeline:
                     f"  Expected: {ids_path}\n"
                     "  Create a CSV with a 'sample_id' column listing the samples for this dataset."
                 )
-        if mode in ['raw', 'stpbench'] and self._has_processed_data() and not self.config['overwrite']:
+        if mode in ['raw', 'stpbench', 'wsi_only'] and self._has_processed_data() and not self.config['overwrite']:
             print(f"Processed data already found at {self.output_dir}. Skipping raw preprocessing.")
         else:
             save_neighbors = _wants_feature(self.config['feature_type'], 'neighbor')
@@ -131,6 +139,7 @@ class DataPipeline:
                 save_neighbor_imgs=self.config['save_neighbor_imgs'] if save_neighbors else False,
                 num_n=self.config['num_n'],
                 dst_pixel_size=self.config['dst_pixel_size'],
+                overwrite=self.config['overwrite'],
             )
 
 
@@ -198,7 +207,7 @@ class DataPipeline:
                 print("Extracting global features...")
                 ok = extract_features_parallel(
                     wsi_dataroot=self.wsi_dataroot,
-                    patch_dataroot=f"{self.asset_dir}/patches",
+                    patch_dataroot=f"{self.patch_source_dir}/patches",
                     embed_dataroot=f"{self.asset_dir}/emb/global",
                     slide_ext=self.config['slide_ext'],
                     patch_encoder=self.config['patch_encoder'],
@@ -213,7 +222,7 @@ class DataPipeline:
                     mode=self.mode,
                 )
                 self._raise_if_extraction_failed(ok, "global")
-            neighbor_patch_dataroot = f"{self.asset_dir}/patches" if self.config['mode'] == 'inference' else f"{self.asset_dir}/patches/neighbor"
+            neighbor_patch_dataroot = f"{self.patch_source_dir}/patches" if self.config['mode'] == 'inference' else f"{self.asset_dir}/patches/neighbor"
             if feature_type in ['neighbor', 'all']:
                 print("Extracting neighbor features...")
                 ok = extract_features_parallel(
@@ -239,7 +248,7 @@ class DataPipeline:
                 print("Extracting target features...")
                 ok = extract_features_parallel(
                     wsi_dataroot=self.wsi_dataroot,
-                    patch_dataroot=f"{self.asset_dir}/patches",
+                    patch_dataroot=f"{self.patch_source_dir}/patches",
                     embed_dataroot=f"{self.asset_dir}/emb/target",
                     slide_ext=self.config['slide_ext'],
                     patch_encoder=self.config['patch_encoder'],
@@ -260,7 +269,7 @@ class DataPipeline:
                 print("Extracting global features...")
                 ok = extract_features_single(
                     wsi_dataroot=self.wsi_dataroot,
-                    patch_dataroot=f"{self.asset_dir}/patches",
+                    patch_dataroot=f"{self.patch_source_dir}/patches",
                     embed_dataroot=f"{self.asset_dir}/emb/global",
                     slide_ext=self.config['slide_ext'],
                     patch_encoder=self.config['patch_encoder'],
@@ -275,7 +284,7 @@ class DataPipeline:
                     mode=self.mode,
                 )
                 self._raise_if_extraction_failed(ok, "global")
-            neighbor_patch_dataroot = f"{self.asset_dir}/patches" if self.config['mode'] == 'inference' else f"{self.asset_dir}/patches/neighbor"
+            neighbor_patch_dataroot = f"{self.patch_source_dir}/patches" if self.config['mode'] == 'inference' else f"{self.asset_dir}/patches/neighbor"
             if feature_type in ['neighbor', 'all']:
                 print("Extracting neighbor features...")
                 ok = extract_features_single(
@@ -301,7 +310,7 @@ class DataPipeline:
                 print("Extracting target features...")
                 ok = extract_features_single(
                     wsi_dataroot=self.wsi_dataroot,
-                    patch_dataroot=f"{self.asset_dir}/patches",
+                    patch_dataroot=f"{self.patch_source_dir}/patches",
                     embed_dataroot=f"{self.asset_dir}/emb/target",
                     slide_ext=self.config['slide_ext'],
                     patch_encoder=self.config['patch_encoder'],
@@ -345,13 +354,15 @@ class DataPipeline:
         ids = pd.read_csv(id_path)['sample_id'].dropna().astype(str).tolist()
         if not ids:
             return False
+        needs_st = self.mode not in ("inference", "wsi_only")
         has_base = all(
             (
                 os.path.isfile(f"{self.asset_dir}/patches/{sample_id}.h5")
                 or os.path.isfile(f"{self.asset_dir}/patches/{sample_id}_patches.h5")
             )
             and (
-                os.path.isfile(f"{self.asset_dir}/st/{sample_id}.h5ad")
+                not needs_st
+                or os.path.isfile(f"{self.asset_dir}/st/{sample_id}.h5ad")
                 or os.path.isfile(f"{self.asset_dir}/adata/{sample_id}.h5ad")
             )
             for sample_id in ids
@@ -391,7 +402,7 @@ def main():
     parser = argparse.ArgumentParser(description="Data Pipeline")
     parser.add_argument("--input_dir", type=str, required=True, help="Input directory")
     parser.add_argument("--output_dir", type=str, required=True, help="Output directory")
-    parser.add_argument("--mode", type=str, default="raw", choices=["raw", "stpbench", "inference"], help="Pipeline mode")
+    parser.add_argument("--mode", type=str, default="raw", choices=["raw", "stpbench", "inference", "wsi_only"], help="Pipeline mode")
     parser.add_argument("--platform", type=str, default="visium", help="ST platform (visium, xenium, etc.)")
     parser.add_argument("--slide_ext", type=str, default=".svs", help="Slide file extension")
     parser.add_argument("--patch_size", type=int, default=224, help="Patch size for extraction")

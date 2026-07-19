@@ -1,3 +1,8 @@
+import os
+
+import h5py
+
+
 class ModelAdapter:
     """Adapter interface for model-specific LightningModule behavior."""
 
@@ -44,7 +49,24 @@ class ModelAdapter:
 
     def inference_prediction_context(self, module):
         dataset = module._trainer.predict_dataloaders.dataset
-        return dataset.name, dataset.genes
+        return dataset.name, dataset.genes, self._read_predict_coords(dataset)
+
+    @staticmethod
+    def _read_predict_coords(dataset):
+        """Read spatial coords for the current predict-time sample from the
+        same patch h5 the dataset itself reads (see STDataset.load_img),
+        so predictions can carry obsm['spatial'] without a second WSI pass.
+        Returns None (not an error) if the patch h5 has no 'coords'
+        dataset — save_predictions treats that as "no spatial info"."""
+        path = os.path.join(dataset.img_dir, f"{dataset.name}.h5")
+        if not os.path.isfile(path):
+            path = os.path.join(dataset.img_dir, f"{dataset.name}_patches.h5")
+        if not os.path.isfile(path):
+            return None
+        with h5py.File(path, 'r') as f:
+            if 'coords' not in f:
+                return None
+            return f['coords'][:]
 
     def evaluation_prediction_context(self, module, batch_idx):
         dataset = module._trainer.test_dataloaders.dataset

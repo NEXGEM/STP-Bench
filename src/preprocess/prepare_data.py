@@ -377,6 +377,76 @@ def save_image(slide_path, patch_path, slide_level=0, patch_size=256):
     save_hdf5(patch_path, asset_dict={'img': imgs}, mode='a')
 
 
+_WSI_EXTENSIONS = (
+    '.svs', '.ndpi', '.tif', '.tiff', '.btf', '.mrxs', '.scn', '.vms',
+    '.vmu', '.bif', '.qptiff',
+)
+
+
+def discover_wsi_files(input_dir, wsi_ext=_WSI_EXTENSIONS):
+    """Return sorted absolute paths of WSI files directly under input_dir."""
+    paths = []
+    for entry in sorted(os.listdir(input_dir)):
+        if entry.lower().endswith(tuple(e.lower() for e in wsi_ext)):
+            paths.append(os.path.join(input_dir, entry))
+    return paths
+
+
+def extract_patches_from_wsi(wsi_path, output_dir, name=None, dst_pixel_size=0.5,
+                              patch_size=224, seg_model_name='hest', seg_target_mag=10,
+                              device='cuda:0', overwrite=False):
+    """Segment tissue and extract a coords-only patch grid from a bare WSI
+    file with no ST companion data.
+
+    Unlike save_patches() (which always goes through a HEST ST reader —
+    hest.HESTData.dump_patches() is spot-centric and needs adata.obsm['spatial'],
+    so it cannot tile a spot-free slide), this calls trident's own
+    WSI.segment_tissue()/extract_tissue_coords() directly. The resulting
+    patches/<name>_patches.h5 carries the same patch_size/level0_magnification/
+    target_magnification attrs that STDataset._get_patcher() already reads via
+    trident's own read_coords() as its primary (non-legacy) path, so nothing
+    downstream (feature extraction, model-specific extra_preprocess) needs to
+    know this patch file came from a WSI-only source.
+    """
+    from trident import load_wsi
+    from trident.segmentation_models import segmentation_model_factory
+
+    wsi = load_wsi(slide_path=wsi_path, lazy_init=False)
+    name = name or wsi.name
+    out_path = os.path.join(output_dir, 'patches', f'{name}_patches.h5')
+    if os.path.isfile(out_path) and not overwrite:
+        print(f"{out_path} exists, skip!")
+        return out_path
+
+    # 20x <-> 0.5 um/px is the scanner convention already implicit in
+    # MPP_TO_LEVEL; derive trident's magnification-based target from the
+    # repo's own pixel-size convention rather than hardcoding a magnification.
+    target_mag = round(20 * (0.5 / dst_pixel_size))
+
+    seg_model = segmentation_model_factory(seg_model_name)
+    job_dir = os.path.join(output_dir, '_seg_job')
+    wsi.segment_tissue(seg_model, target_mag=seg_target_mag, job_dir=job_dir, device=device)
+    coords_path = wsi.extract_tissue_coords(
+        target_mag=target_mag, patch_size=patch_size, save_coords=output_dir,
+    )
+    return coords_path
+
+
+def _write_ids_from_patch_dir(output_dir, meta_dir=None):
+    """Scan output_dir/patches/*.h5 and write ids.csv from their filenames.
+
+    Shared by 'inference' mode (patches already extracted by some other
+    means) and 'wsi_only' mode (patches just extracted by
+    extract_patches_from_wsi, above) — both cases have no ST/expression
+    data to derive sample IDs from, only the patch files themselves.
+    """
+    manifest_dir = meta_dir or output_dir
+    sample_ids = _sample_ids_from_patch_dir(f"{output_dir}/patches") or []
+    os.makedirs(manifest_dir, exist_ok=True)
+    pd.DataFrame(sample_ids, columns=['sample_id']).to_csv(f"{manifest_dir}/ids.csv", index=False)
+    return sample_ids
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--input_dir", type=str, default=None)
@@ -384,7 +454,7 @@ if __name__ == "__main__":
     parser.add_argument("--meta_dir", type=str, default=None)
     parser.add_argument("--platform", type=str, default='visium')
     parser.add_argument("--prefix", type=str, default='')
-    parser.add_argument("--mode", type=str, default='raw', choices=['raw', 'stpbench', 'inference'])
+    parser.add_argument("--mode", type=str, default='raw', choices=['raw', 'stpbench', 'inference', 'wsi_only'])
     parser.add_argument("--overwrite", action='store_true', default=False)
     parser.add_argument("--slide_level", type=int, default=0)
     parser.add_argument("--slide_ext", type=str, default='.svs')
@@ -458,11 +528,30 @@ if __name__ == "__main__":
             preprocess_st(name, adata, output_dir)
 
     elif mode == 'inference':
-        patch_dir = f"{output_dir}/patches"
-        ids = glob(f"{patch_dir}/*.h5")
-        sample_ids = [
-            os.path.splitext(os.path.basename(p))[0].replace("_patches", "")
-            for p in ids
-        ]
-        pd.DataFrame(sample_ids, columns=['sample_id']).to_csv(f"{output_dir}/ids.csv", index=False)
+        # Patches already exist under input_dir (that's the whole premise
+        # of 'inference' mode — nothing gets extracted here). output_dir
+        # is a separate, writable location for the refreshed ids.csv (and
+        # any later feature extraction) — it may not contain the patches
+        # at all, e.g. when input_dir is a shared/read-only asset dir.
+        _write_ids_from_patch_dir(input_dir, meta_dir=meta_dir)
+
+    elif mode == 'wsi_only':
+        os.makedirs(f"{output_dir}/patches", exist_ok=True)
+
+        if os.path.isfile(input_dir) or input_dir.lower().endswith(_WSI_EXTENSIONS):
+            wsi_paths = [input_dir]
+        else:
+            wsi_paths = discover_wsi_files(input_dir)
+            if not wsi_paths:
+                raise FileNotFoundError(f"No WSI files found under {input_dir}")
+
+        for wsi_path in tqdm(wsi_paths):
+            extract_patches_from_wsi(
+                wsi_path, output_dir,
+                dst_pixel_size=dst_pixel_size,
+                patch_size=args.patch_size,
+                overwrite=args.overwrite,
+            )
+
+        _write_ids_from_patch_dir(output_dir, meta_dir=meta_dir)
 

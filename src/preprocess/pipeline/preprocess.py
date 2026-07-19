@@ -34,7 +34,8 @@ def preprocess_data(
     save_neighbors: bool = False,
     save_neighbor_imgs: bool = False,
     num_n: int = 5,
-    dst_pixel_size: float = 0.5
+    dst_pixel_size: float = 0.5,
+    overwrite: bool = False
 ) -> None:
     """
     Run data preprocessing
@@ -50,6 +51,7 @@ def preprocess_data(
         save_neighbors: Whether to save neighbor patches
         num_n: Number of neighbors to extract
         dst_pixel_size: Desired pixel size for patches (in microns)
+        overwrite: Whether to force re-extraction of already-processed patches
     """
     cmd = [
         sys.executable, _repo_script("src/preprocess/prepare_data.py"),
@@ -71,9 +73,11 @@ def preprocess_data(
         cmd.append("--save_neighbors")
     if save_neighbor_imgs:
         cmd.append("--save_neighbor_imgs")
+    if overwrite:
+        cmd.append("--overwrite")
 
     return_code, output = run_command(cmd, cwd=str(REPO_ROOT))
-    
+
     if return_code != 0:
         print(f"Error occurred during preprocessing: {output}")
         return False
