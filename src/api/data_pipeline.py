@@ -108,7 +108,11 @@ class DataPipeline:
         self.patch_source_dir = self.input_dir if mode == 'inference' else self.asset_dir
         self.metadata_dir = self._abs(self.config.get('meta_dir')) or self.output_dir
         self.wsi_dataroot = f"{self.input_dir}/wsis" if mode == 'stpbench' else self.input_dir
-        self.dirs = setup_paths(self.output_dir)
+        feature_type = self.config.get('feature_type')
+        needed_features = tuple(
+            name for name in ('global', 'neighbor', 'target') if _wants_feature(feature_type, name)
+        )
+        self.dirs = setup_paths(self.output_dir, features=needed_features)
 
     def preprocess(self):
         """Run preprocessing steps based on mode."""
