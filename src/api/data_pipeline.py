@@ -122,7 +122,14 @@ class DataPipeline:
                     f"  Expected: {ids_path}\n"
                     "  Create a CSV with a 'sample_id' column listing the samples for this dataset."
                 )
-        if mode in ['raw', 'stpbench', 'wsi_only'] and self._has_processed_data() and not self.config['overwrite']:
+        # 'wsi_only' is excluded here (matching 'inference', already excluded):
+        # both are per-target-identity modes where a dataset-wide ids.csv
+        # snapshot doesn't mean "this call's specific slide is done" — it may
+        # be stale, left over from a DIFFERENT slide predicted earlier into
+        # the same output_dir. extract_patches_from_wsi/
+        # extract_patches_from_coords_file already do their own correct,
+        # per-slide skip-if-exists check (see 'exists, skip!').
+        if mode in ['raw', 'stpbench'] and self._has_processed_data() and not self.config['overwrite']:
             print(f"Processed data already found at {self.output_dir}. Skipping raw preprocessing.")
         else:
             save_neighbors = _wants_feature(self.config['feature_type'], 'neighbor')
@@ -140,6 +147,7 @@ class DataPipeline:
                 num_n=self.config['num_n'],
                 dst_pixel_size=self.config['dst_pixel_size'],
                 overwrite=self.config['overwrite'],
+                coords_path=self.config.get('coords_path'),
             )
 
 
