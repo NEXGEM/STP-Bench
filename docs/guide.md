@@ -1,50 +1,221 @@
 # STP-Bench Guide
 
-Step-by-step guides for the workflows that don't fit in the [README](../README.md)'s
-quick start: running the pipeline stage by stage, adding a new dataset, and
-adding a new model.
+A complete reference for the `STPred` API: creating an instance, every workflow
+method and its parameters, result objects, and the two extension guides
+(adding a dataset, adding a model). For install steps and the shortest
+possible end-to-end example, see the [README](../README.md) first.
 
 ## Contents
 
-- [Usage Patterns](#usage-patterns)
+- [Creating an STPred Instance](#creating-an-stpred-instance)
+- [Core Workflow](#core-workflow)
+  - [Validating Configuration](#validating-configuration)
+  - [Preprocessing](#preprocessing)
+  - [Training](#training)
+  - [Evaluation](#evaluation)
+  - [One-shot Benchmark](#one-shot-benchmark)
+  - [Prediction](#prediction)
+  - [Easy Inference Directly on a WSI](#easy-inference-directly-on-a-wsi)
+  - [Visualizing a Prediction](#visualizing-a-prediction)
+- [Result Objects](#result-objects)
+- [Resuming and Persisting a Run](#resuming-and-persisting-a-run)
+- [Discovery and Config Helpers](#discovery-and-config-helpers)
 - [Adding a New Dataset](#adding-a-new-dataset)
 - [Adding a New Model](#adding-a-new-model)
+- [Claude Code Skills](#claude-code-skills)
 
-## Usage Patterns
+## Creating an STPred Instance
+
+Everything else in this guide starts from one `STPred` object:
 
 ```python
-# List available data configs and the models configured on this STPred instance.
-print(stp.list_data())
-print(stp.list_models())
+from stpbench import STPred
+
+stp = STPred(
+    models=["StNet", "TRIPLEX"],   # or a single model name as a string
+    repo_root="/path/to/repo",     # where config/, logs/, etc. live
+    gpu=1,
+    gpu_id=0,
+)
 ```
 
-**Step by step, instead of one-shot `benchmark()`:**
+`STPred(...)` never touches disk at all — it just records settings. Config
+files are only resolved when a workflow method (`preprocess()`, `train()`,
+...) actually runs.
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `models` | *required* | A model config name, or a list of them (`"StNet"` or `["StNet", "TRIPLEX"]`). Every workflow method runs all of these unless overridden per-call (`preprocess(..., models=[...])`, `predict(..., models=[...])`). Must resolve to `config/model/<name>.yaml`. |
+| `repo_root` | `"."` | Root directory containing `config/`, `logs/`, etc. All relative paths in configs (`meta_dir`, `log_path`, `output_dir`, ...) resolve against this, not the process's current working directory. Pass it explicitly whenever you run from somewhere other than the repo root. |
+| `gpu` | `1` | Number of GPUs to use, starting at `gpu_id`. Models run in parallel across `gpu` GPUs when more than one model/fold is queued. |
+| `gpu_id` | `0` | Index of the first GPU. `gpu=2, gpu_id=1` uses physical GPUs 1 and 2. |
+| `debug` | `False` | Skips loggers/checkpoint callbacks and only runs sanity-check validation steps — for quickly smoke-testing a model wiring without writing real logs or checkpoints. |
+| `dry_run` | `False` | `preprocess()`/`benchmark()` return the computed plan (what would run) instead of executing it. |
+| `preprocess_overrides` | `None` | Dict merged into every preprocessing run's config (e.g. `{"overwrite": True}` to always force re-processing across every `preprocess()`/`predict()` call this instance makes). Per-call arguments (`preprocess(..., overwrite=True)`) still take precedence over this when explicitly given. |
+| `verbose` | `True` | Print `[STPBench]` progress lines to the console. |
+| `log_file` | `None` | Path to also persist structured JSONL events (one line per step, with elapsed seconds) — independent of `verbose`. |
+| `wandb` | `False` | Opt-in to online Weights & Biases tracking during training. |
+| `wandb_project` | `"ST_prediction"` | W&B project name (only used when `wandb=True`). |
+
+`STPred` also tracks lightweight workflow state as you call methods — the
+dataset last used for training (`internal_data`), the checkpoint timestamp per
+model/fold, results from each step, and (once you call a WSI-path `predict()`)
+the `output_dir` that call wrote into. This is what lets later calls omit
+arguments they can infer, e.g. `stp.train()` with no `data` reuses whatever
+`preprocess()` most recently ran against, and `stp.visualize()` with no
+`output_dir` reuses the last `predict()` call's. See
+[Resuming and Persisting a Run](#resuming-and-persisting-a-run) to save/restore
+this state across processes.
+
+## Core Workflow
+
+Every method below is a normal Python call on the `stp` instance created
+above. All of them accept `data`/config names as exact `config/data/<name>.yaml`
+/ `config/model/<name>.yaml` matches — see
+[Configuration](../README.md#configuration) in the README for the config file
+shape, and [Discovery and Config Helpers](#discovery-and-config-helpers) below
+for how to list/inspect what's available.
+
+### Validating Configuration
+
+```python
+stp.check(data="ncche/xenium", mode="train", strict=False)
+```
+
+Verifies config shape and expected on-disk artifacts *before* committing to a
+potentially long run — checks `data_dir`, `meta_dir/ids.csv`, gene-set/CV-split
+files (unless `mode="inference"`), and a sample of patch/embedding files per
+model. Returns a report dict (`ok`, `missing`, per-model `reports`); pass
+`strict=True` to raise `FileNotFoundError` instead of returning a report with
+missing paths listed. `mode` is one of `"train"` (default), `"eval"`, or
+`"inference"` — `"inference"` skips the gene-set/CV-split checks that don't
+apply to unlabeled prediction targets. `preflight` is an alias for `check`.
+
+### Preprocessing
 
 ```python
 stp.preprocess(data="ncche/xenium")
-stp.train(data="ncche/xenium")
-int_result = stp.evaluate_internal()
-ext_result = stp.evaluate_external(data="hest/LUAD")
-
-# Results are dict-compatible and provide convenience helpers.
-print(ext_result.summary())
-print(ext_result.best_checkpoints())
-ext_result.save("benchmark_results.csv")
+stp.preprocess(data="ncche/xenium", models=["StNet"])   # only prep for one model
+stp.preprocess(data="ncche/xenium", overwrite=True)      # force re-processing
 ```
 
-**Inference on unlabeled external data:**
+Runs one deduplicated plan for every configured model: raw preprocessing
+(patch/ST extraction), gene-set preparation, cross-validation splits, and
+feature (patch-embedding) extraction, skipping any step whose output already
+exists unless `overwrite=True`. See
+[Adding a New Dataset](#adding-a-new-dataset) for what each step produces and
+the raw-vs-`stpbench`-mode distinction. Extra keyword arguments are merged
+into the run's `preprocess:` config (e.g. `platform=`, `n_splits=`); pass
+`dry_run=True` (or construct `STPred(..., dry_run=True)`) to get the computed
+plan back without executing it.
+
+### Training
 
 ```python
-pred_result = stp.predict(data="cptac/xenium")
+stp.train(data="ncche/xenium")
+stp.train()   # reuses whatever preprocess()/train() most recently used
 ```
 
-**Easy inference directly on a WSI (no data config to write):**
+Trains every configured model on `data`'s cross-validation folds. `data`
+defaults to the instance's last-used internal dataset (set by a prior
+`preprocess()`/`train()` call), so it can be omitted on a second call against
+the same dataset. Returns a `BenchmarkResult` with per-model, per-fold metrics
+and updates `stp.state["train_results"]`.
 
-`data` also accepts a filesystem path instead of a named config — STP-Bench
-extracts patches and features for you. Non-config targets require
-`output_dir` (where extracted patches/embeddings/predictions are written)
-and a resolvable checkpoint (`ckpt_path`, or `train_data`/a prior
-`train()`/`from_run()` call):
+### Evaluation
+
+```python
+stp.evaluate_internal(data="ncche/xenium")               # test folds from training
+stp.evaluate_external(data="hest/LUAD", train_data="ncche/xenium")
+```
+
+- `evaluate_internal(data=None, folds=None, timestamps=None)` — evaluates the
+  internal test folds. `data` defaults to the last-trained dataset.
+- `evaluate_external(data, train_data=None, folds=None, timestamps=None)` —
+  evaluates a **labeled** external dataset (has ground-truth ST expression)
+  using checkpoints trained on `train_data` (defaults to the instance's
+  internal dataset). If the external dataset is missing base artifacts
+  (patches/embeddings), `preprocess()` runs automatically first. Any
+  model-specific `extra_preprocess` also re-runs in *external* mode (correct
+  train-vs-eval namespacing, e.g. EGN/EGGN reference banks, OmiCLIP similarity
+  matrices) rather than treating the external set as a standalone dataset.
+
+Both are thin wrappers over `evaluate(mode, data=None, external_data=None,
+folds=None, timestamps=None)` (`mode="int"` or `"ext"`) if you need the
+combined form directly. `timestamps` lets you pin a specific training run
+(`{"StNet": "2026-05-18-12-00-00"}`) instead of the latest one; see
+[Resuming and Persisting a Run](#resuming-and-persisting-a-run).
+
+### One-shot Benchmark
+
+```python
+result = stp.benchmark(internal_data="ncche/xenium", external_data="hest/LUAD")
+```
+
+Runs `preprocess` → `train` → `evaluate_internal`, and if `external_data` is
+given, also `preprocess` → `predict` → `evaluate_external` against it — the
+whole pipeline in one call. Extra keyword arguments are forwarded to the
+`preprocess()` calls. Returns a `BenchmarkResult` wrapping every step's own
+result under `result["steps"]`.
+
+### Prediction
+
+```python
+stp.predict(
+    data,                    # named config, WSI path, or asset dir — see below
+    ckpt_path=None,          # explicit checkpoint (dict per-model, or one path for all)
+    train_data=None,         # resolve the latest checkpoint from this training run
+    folds=None,
+    timestamps=None,
+    models=None,             # per-call model subset, doesn't mutate stp.models
+    output_dir=None,         # required for WSI/asset-dir targets — see below
+    gene_list=None,          # restrict output to these genes
+    wsi_dir=None,            # only for the WSI-batch-directory form — see below
+    overwrite=None,          # force re-extraction for WSI/asset-dir targets
+    coordinates=None,        # crop patches at these coordinates instead of tissue-seg tiling
+    batch_size=32,           # patches per model forward pass — see below
+)
+```
+
+Predicts on slide-image-only data (no ground-truth expression needed). A
+checkpoint must be resolvable via `ckpt_path`, or via `train_data` (or a prior
+`train()`/`from_run()` call on this instance) which picks the latest matching
+run automatically. `gene_list` restricts prediction to a user-supplied subset
+of the training gene panel — names not found in that panel are dropped with a
+warning rather than failing the whole run, and the call raises `ValueError` if
+*none* of the requested names are found. `models` overrides which models run
+for this call only (`stp.models` itself is unchanged).
+
+`coordinates` is a path to an `.h5ad` (patch centers read from
+`obsm['spatial']`) or `.csv` (`x`/`y` columns) file of patch-**center**
+coordinates — when given, `predict()` crops exactly those patches instead of
+running tissue segmentation + automatic tiling. Only valid when `data` is a
+single WSI file (raises `ValueError` for any other kind of target). See
+[Easy Inference Directly on a WSI](#easy-inference-directly-on-a-wsi) below
+for a full example and the `overwrite=True` caveat when re-predicting into an
+`output_dir` that already has patches extracted.
+
+`batch_size` overrides how many patches are batched together per model
+forward pass — defaults to 32 (the data config's own `DATA.test_dataloader.
+batch_size`, usually 1, is used only if `batch_size=None` is passed
+explicitly). Raise or lower it depending on GPU memory and slide size.
+
+`data` accepts four different kinds of target:
+
+| Kind | Example | Needs `output_dir` |
+|---|---|---|
+| Named config | `"cptac/xenium"` | No |
+| Single WSI file | `"/path/to/slide.svs"` | Yes |
+| Directory of WSI files | `"/path/to/slides_dir/"` | Yes |
+| Already-preprocessed asset dir (has `patches/*.h5`) | `"/path/to/existing_assets"` | Yes |
+
+The last three are covered in detail next.
+
+### Easy Inference Directly on a WSI
+
+For the latter three kinds, `output_dir` says where extracted
+patches/embeddings/predictions get written, and STP-Bench runs patch
+extraction and feature embedding automatically — no data config to write:
 
 ```python
 # A single slide file
@@ -54,11 +225,16 @@ stp.predict(
     train_data="ncche/xenium",   # or ckpt_path="/path/to/checkpoint.ckpt"
 )
 
-# A directory of slides -- one prediction per slide, same output_dir
+# A directory of slides -- one prediction per slide, same output_dir.
+# wsi_dir overrides where the *original* slide files are looked up from
+# later (e.g. by visualize()) if it differs from the directory passed as data.
 stp.predict(data="/path/to/slides_dir/", output_dir="/path/to/output", train_data="ncche/xenium")
 
 # Already-preprocessed assets (a directory containing patches/*.h5) --
-# output_dir here is just where predictions are written, not re-extracted into
+# output_dir is where predictions (and ids.csv/embeddings, if a chosen
+# model needs embeddings not already present) are written; the asset
+# directory itself is only ever read, never written to, so it's safe to
+# point at something shared or read-only.
 stp.predict(data="/path/to/existing_assets", output_dir="/path/to/predictions", train_data="ncche/xenium")
 
 # Restrict output to specific genes; names not in the training panel are
@@ -68,28 +244,104 @@ stp.predict(
     gene_list=["GENE1", "GENE2"],
 )
 
-# Per-call model override -- doesn't mutate stp.list_models()
+# Per-call model override -- doesn't mutate stp.models
 stp.predict(data="/path/to/slide.svs", output_dir="/path/to/output", train_data="ncche/xenium", models=["TRIPLEX"])
+
+# Force re-extraction of patches/embeddings even if output_dir already has them
+stp.predict(data="/path/to/slide.svs", output_dir="/path/to/output", train_data="ncche/xenium", overwrite=True)
+
+# Predict at your own patch coordinates instead of automatic tissue-seg
+# tiling -- crops exactly these locations, no segmentation run at all.
+# coordinates is a path to an .h5ad (patch centers from obsm['spatial'])
+# or .csv (x, y columns) file; only valid for a single WSI file.
+stp.predict(
+    data="/path/to/slide.svs", output_dir="/path/to/output", train_data="ncche/xenium",
+    coordinates="/path/to/spots.h5ad",   # or "/path/to/spots.csv"
+)
 ```
 
-The output `.h5ad` includes `obsm['spatial']` patch coordinates. This path
-works for models using the default `feature_type` mechanism (StNet, TRIPLEX,
-DeepSpot, HisToGene, DeepSpotM, ...); models with `extra_preprocess`
-(EGN, EGGN, Sepal, OmiCLIP, M2ORT, M2OST) and SGN/Stem still require the
-named-config path above.
+The output `.h5ad` includes `obsm['spatial']` patch coordinates, which is what
+`visualize()` (next section) plots against. This path works for models using
+the default `feature_type` mechanism (StNet, TRIPLEX, DeepSpot, HisToGene,
+DeepSpotM, ...); models with `extra_preprocess` (EGN, EGGN, Sepal, OmiCLIP,
+M2ORT, M2OST) and SGN/Stem still require the named-config path above.
 
-**Resume a known training run** without keeping the original Python process alive:
+`coordinates` takes patch **centers**, converted internally to the
+non-overlapping top-left-corner format the pipeline stores on disk — no need
+to do that math yourself. If `output_dir` already has patches extracted by an
+earlier call (e.g. a prior tissue-seg run against the same slide), pass
+`overwrite=True` too, or the old patches are reused unchanged rather than
+re-cropped at the new coordinates.
+
+### Visualizing a Prediction
+
+```python
+path = stp.visualize(
+    gene="SFTPB",
+    sample="TENX118",
+    output_dir=None,   # defaults to the most recent predict() call's output_dir
+    model=None,         # disambiguate if more than one model predicted this sample
+    save_path=None,     # defaults to <output_dir>/viz/<sample>_<gene>.png
+)
+```
+
+Renders one gene's predicted expression for one sample as a heatmap and saves
+it to a PNG (returns the saved path). If the original WSI can still be
+located (via the `predict()` run's own config, so this works automatically
+right after a WSI-path `predict()` call above), the heatmap is overlaid on the
+slide's own thumbnail with each patch drawn at its true non-overlapping
+footprint; otherwise it falls back to a plain spatial scatter plot and prints
+a note to stderr rather than failing. If more than one model predicted the
+same sample into the same `output_dir`, pass `model=` to pick which one's
+prediction to visualize — otherwise `visualize()` raises, listing the
+candidates.
+
+```python
+stp.predict(data="/path/to/slide.svs", output_dir="/path/to/output", train_data="ncche/xenium")
+stp.visualize(gene="SFTPB", sample="TENX118")   # output_dir inferred from the call above
+```
+
+## Result Objects
+
+Every workflow method above (except `check()` and `visualize()`, which return
+a plain dict / path string) returns a `BenchmarkResult`. They're
+dict-compatible and provide:
+
+```python
+result.summary()          # per-model results, cross-fold aggregate stats (mean, std, per_fold) per metric
+result.to_records()        # flat list of per-fold dicts
+result.to_dataframe()       # pandas DataFrame of records
+result.best_checkpoints()   # best checkpoint path per model/fold
+result.prediction_dirs()    # prediction output directories
+result.save("results.csv")  # write records to CSV
+```
+
+`benchmark()`'s result additionally exposes each step's own result under
+`result["steps"]` (e.g. `result["steps"]["train"]`).
+
+## Resuming and Persisting a Run
+
+**Resume a known training run** without keeping the original Python process
+alive — reconstructs the checkpoint-resolution state `predict()`/`evaluate()`
+need, without re-running `train()`:
 
 ```python
 stp = STPred.from_run(
     data="ncche/xenium",
     models=["StNet"],
-    timestamp="2026-05-18-12-00-00",
+    timestamp="2026-05-18-12-00-00",   # omit to auto-pick each model's latest run
 )
 stp.evaluate_external(data="hest/LUAD")
 ```
 
-**Persist and restore workflow state:**
+`timestamp` accepts a single string (used for every model), a
+`{model: timestamp}` dict, or `None` (auto-picks the latest run directory per
+model under `<log_path>/<data>/<model>/`).
+
+**Persist and restore full workflow state** — everything `save_state()`
+writes (constructor settings, `internal_data`/`external_data`, results,
+checkpoint timestamps, `last_output_dir`, ...), so a later process can pick up
+exactly where this one left off:
 
 ```python
 stp.save_state("logs/my_stpred_state.yaml")
@@ -99,21 +351,30 @@ stp2.load_state("logs/my_stpred_state.yaml")
 stp2.predict(data="cptac/xenium")
 ```
 
-**Discovery and config helpers:**
+`STPred.from_run(..., state_path="logs/my_stpred_state.yaml")` combines
+construction and `load_state()` in one call.
+
+## Discovery and Config Helpers
 
 ```python
 # On an instance: list configured models and inspect configs using stp.repo_root.
-stp.list_data()
-stp.list_models()
-stp.list_available_models()
+stp.list_data()               # data config names available under config/data/
+stp.list_models()              # echoes back stp.models — what THIS instance was constructed with
+stp.list_available_models()    # model config names available under config/model/ (discovery, not stp.models)
 stp.describe_data("ncche/xenium")
 stp.describe_model("StNet")
 
 # As classmethods: pass repo_root explicitly if not running from repo root.
 STPred.list_data(repo_root="/path/to/repo")
+STPred.list_available_models(repo_root="/path/to/repo")
 STPred.init_data_config("my_data")    # write an editable template
 STPred.init_model_config("MyModel")
 ```
+
+`list_models()` and `list_available_models()` are easy to mix up:
+`list_models()` only echoes back whatever was passed to `STPred(models=[...])`
+at construction; `list_available_models()` is the actual config-discovery view
+of everything under `config/model/`.
 
 ## Adding a New Dataset
 
@@ -236,6 +497,16 @@ later re-run of `preprocess()` itself) reads only that resulting layout and
 never looks at `preprocess.mode` again. Once your own raw data has been
 ingested with `mode: raw`, leave it set to `raw` — there's nothing to change
 afterward.
+
+Two more `preprocess.mode` values exist but aren't meant to be hand-written in
+a data config: `inference` (already-extracted assets, no ST/expression data —
+this is what a WSI-path `predict()`'s already-preprocessed-asset-dir form
+uses internally) and `wsi_only` (extract patches from a bare WSI with no
+companion ST data at all — what a WSI-path `predict()` uses internally for a
+single slide file or directory of slides). See
+[Easy Inference Directly on a WSI](#easy-inference-directly-on-a-wsi) for the
+`predict()`-level interface to both; you won't normally write either mode by
+hand.
 
 ### Dry-run check before preprocessing
 
@@ -420,3 +691,34 @@ MODEL:
   extra_preprocess:
     ...
 ```
+
+## Claude Code Skills
+
+This repository ships [Claude Code](https://claude.com/claude-code) skills
+under `.claude/skills/` that encode the two extension guides above
+(**[Adding a New Dataset](#adding-a-new-dataset)**,
+**[Adding a New Model](#adding-a-new-model)**) as agent-actionable
+checklists, grounded in the repository's actual internals rather than a
+generic description — adapter registry lookups, `dataset_name` resolution,
+and known failure modes around external evaluation (gene-panel mismatches,
+reference-bank corruption, unforwarded `genes_override`/`ref_data_dir`
+kwargs) that this repo's history has repeatedly hit.
+
+| Skill | Triggers on |
+|---|---|
+| `add-dataset` | "Add a new dataset", onboarding raw slides/ST data, setting up an internal/external evaluation cohort |
+| `add-model` | "Add a new model", integrating a published ST-prediction method, wiring a model class into `STPred`'s benchmark loop |
+
+Each skill starts by asking for the model source or raw data location — see
+[Extending STP-Bench](../README.md#extending-stp-bench) in the README for what
+to have ready (a local path or git URL for model code, a local path or
+download URL/accession for raw data). Claude Code discovers both skills
+automatically; simply ask it to add a new model or dataset and it follows the
+corresponding skill's checklist, including the verification steps at the end
+(`stp.check()`, `stp.preprocess()`, `stp.train()`, `stp.evaluate_internal()`,
+`stp.evaluate_external()`, and — for models using the default `feature_type`
+mechanism — a sanity-check `stp.predict()` call directly on a WSI file).
+
+This mechanism is specific to Claude Code and is not read by other coding
+agents or by `STPred` itself — the skills are a development-time aid, not
+part of the runtime API.

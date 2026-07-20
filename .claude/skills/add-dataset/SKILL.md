@@ -1,6 +1,6 @@
 ---
 name: add-dataset
-description: Register and preprocess a new dataset (raw WSIs + spatial transcriptomics data, or a HEST-formatted cohort) for STP-Bench. Use when the user asks to add a new dataset, onboard raw slides/ST data for benchmarking, or set up an internal/external evaluation cohort ("새 데이터셋 추가", "add <name> dataset").
+description: Register and preprocess a new dataset (raw WSIs + spatial transcriptomics data, or a HEST-formatted cohort) for STP-Bench. Use when the user asks to add a new dataset, onboard raw slides/ST data for benchmarking, or set up an internal/external evaluation cohort ("add <name> dataset").
 ---
 
 # Adding a New Dataset to STP-Bench

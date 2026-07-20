@@ -195,37 +195,30 @@ Config names map exactly to YAML files (`config/data/ncche/xenium.yaml`,
 `config/model/StNet.yaml`, ...). If a file is missing, `STPred` raises an error
 with the exact path to create.
 
-For step-by-step workflows (running each stage separately, resuming a run,
-persisting/restoring state, discovery helpers), see
-**[docs/guide.md — Usage Patterns](docs/guide.md#usage-patterns)**.
+For the full `STPred` reference (constructor parameters, running each stage
+separately, resuming a run, persisting/restoring state, discovery helpers),
+see **[docs/guide.md](docs/guide.md)**.
 
 ## Python API
 
-Primary workflow methods:
+Primary workflow methods, one line each — see
+**[docs/guide.md — Core Workflow](docs/guide.md#core-workflow)** for full
+parameter references and examples of every one of these:
 
-- `stp.benchmark(internal_data, external_data=None)`: preprocess, train, internal evaluate, and optionally external predict/evaluate.
+- `stp.check(data, strict=False)`: validate configs and expected artifacts before a heavy run.
 - `stp.preprocess(data, dry_run=False)`: prepare one dataset for all selected models.
 - `stp.train(data=None)`: train all selected models.
-- `stp.evaluate_internal(data=None)`: evaluate internal test folds.
-- `stp.evaluate_external(data, train_data=None)`: evaluate external labeled data using an internal training run. If the external dataset is missing base artifacts (patches/embeddings), `preprocess()` is triggered automatically before evaluation.
-- `stp.predict(data, train_data=None, ckpt_path=None, models=None, output_dir=None, gene_list=None, wsi_dir=None, overwrite=False)`: predict on slide-image-only data. `data` accepts a named config, a single WSI file, a directory of WSI files (one prediction per slide), or an already-preprocessed asset directory — the latter three require `output_dir` and run patch extraction/feature embedding automatically. See [docs/guide.md — Usage Patterns](docs/guide.md#usage-patterns) for examples.
-- `stp.check(data, strict=False)`: validate configs and expected artifacts before a heavy run.
+- `stp.evaluate_internal(data=None)` / `stp.evaluate_external(data, train_data=None)`: evaluate on internal test folds, or a labeled external dataset.
+- `stp.benchmark(internal_data, external_data=None)`: preprocess, train, internal evaluate, and optionally external predict/evaluate, in one call.
+- `stp.predict(data, train_data=None, ...)`: predict on slide-image-only data — a named config, or (see [Easy Inference Directly on a WSI](docs/guide.md#easy-inference-directly-on-a-wsi)) a bare WSI file/directory/asset dir with no config to write.
+- `stp.visualize(gene, sample, ...)`: render a predicted gene's expression for one sample on the slide's own thumbnail. See [Visualizing a Prediction](docs/guide.md#visualizing-a-prediction).
 
-Benchmark logging is enabled by default and uses a consistent `[STPBench]` line
-format with elapsed seconds for each major step. Pass `verbose=False` to silence
-console logs, or `log_file="logs/run.jsonl"` to persist structured JSONL events.
-Weights & Biases is opt-in: pass `wandb=True` to `STPred(...)` when online W&B
-tracking is desired. Use `wandb_project="..."` to choose the W&B project name.
-
-Result objects are `BenchmarkResult` instances. They are dict-compatible and
-provide:
-
-- `result.summary()` — per-model results including cross-fold aggregate stats (`mean`, `std`, `per_fold`) for each metric
-- `result.to_records()` — flat list of per-fold dicts
-- `result.to_dataframe()` — pandas DataFrame of records
-- `result.best_checkpoints()` — best checkpoint path per model/fold
-- `result.prediction_dirs()` — prediction output directories
-- `result.save("results.csv")` — write records to CSV
+Every workflow method above returns a `BenchmarkResult` (dict-compatible,
+`.summary()`, `.to_dataframe()`, `.save("results.csv")`, ...) — see
+[docs/guide.md — Result Objects](docs/guide.md#result-objects). Logging
+(`verbose`, `log_file`) and W&B tracking (`wandb`, `wandb_project`) are
+constructor options — see
+[docs/guide.md — Creating an STPred Instance](docs/guide.md#creating-an-stpred-instance).
 
 ## Configuration
 
@@ -263,12 +256,10 @@ preprocess:
 ```
 
 Use `STPred.init_data_config("my_data")` to generate an editable template.
-
-**`repo_root` parameter** — all relative paths in configs (`meta_dir`, `log_path`, `output_dir`) are resolved relative to `repo_root` (defaults to `.`). Pass it explicitly when running from a directory other than the repo root:
-
-```python
-stp = STPred(models=["StNet"], gpu=1, repo_root="/path/to/stp_bench")
-```
+All relative paths in configs (`meta_dir`, `log_path`, `output_dir`) are
+resolved relative to the `repo_root` passed to `STPred(...)` — see
+[docs/guide.md — Creating an STPred Instance](docs/guide.md#creating-an-stpred-instance)
+for that and every other constructor parameter.
 
 ## Outputs
 
@@ -279,10 +270,14 @@ Default locations (can be changed in the data config YAML):
 - Predictions (eval): `<DATA.output_dir>/<data>/<model>/fold<k>/`
 - Predictions (inference): `<DATA.output_dir>/<data>/<model>/<train_data>/fold<k>/`
 
-For a WSI-path `predict()` call (see [docs/guide.md](docs/guide.md#usage-patterns)),
+For a WSI-path `predict()` call (see [docs/guide.md](docs/guide.md#easy-inference-directly-on-a-wsi)),
 `output_dir` doubles as the patch/embedding root: patches/embeddings land at
 `<output_dir>/patches/`, `<output_dir>/emb/`, and predictions nest under
-`<output_dir>/<data>/<model>/<train_data>/fold<k>/` as above.
+`<output_dir>/_wsi_predict/predictions/<model>/<train_data>/fold<k>/` —
+no per-slide directory, since `output_dir` is commonly reused across
+separate calls on different slides and samples are already distinguished by
+their own `<sample>.h5ad` filename. Provenance manifests land one level up,
+one per sample: `<output_dir>/_wsi_predict/manifests/<sample>.yaml`.
 
 ## Extending STP-Bench
 
@@ -311,15 +306,9 @@ With that in hand:
 
 #### For Claude Code
 
-This repository ships two [Claude Code](https://claude.com/claude-code) skills
-under `.claude/skills/` — `add-model` and `add-dataset` — that encode the
-procedures above as agent-actionable checklists grounded in the repository's
-actual internals (adapter registry, `dataset_name` resolution, and known
-failure modes around external evaluation). Each skill starts by asking for
-the model source or raw data location described above. Claude Code discovers
-them automatically; simply ask it to add a new model or dataset and it will
-follow the corresponding skill. This mechanism is specific to Claude Code and
-is not read by other coding agents.
+This repository ships [Claude Code](https://claude.com/claude-code) skills
+that encode the procedures above as agent-actionable checklists — see
+[docs/guide.md — Claude Code Skills](docs/guide.md#claude-code-skills).
 
 ## License
 

@@ -1,6 +1,6 @@
 ---
 name: add-model
-description: Integrate a new prediction model into STP-Bench (model class, config, optional custom adapter/dataset/preprocessing). Use when the user asks to add a new model, integrate a published ST-prediction method, or wire up a model class for STPred's benchmark loop ("새 모델 추가", "add <ModelName>").
+description: Integrate a new prediction model into STP-Bench (model class, config, optional custom adapter/dataset/preprocessing). Use when the user asks to add a new model, integrate a published ST-prediction method, or wire up a model class for STPred's benchmark loop ("add <ModelName>").
 ---
 
 # Adding a New Model to STP-Bench
@@ -190,7 +190,7 @@ model done until it has been run through both.
 
 If the model uses the default `feature_type` mechanism (no `extra_preprocess`),
 also sanity-check `stp.predict()` directly on a WSI file — see
-[docs/guide.md — Usage Patterns](../../../docs/guide.md#usage-patterns) for
-the call shape. Models with `extra_preprocess` (graph/reference-bank builders)
+[docs/guide.md — Easy Inference Directly on a WSI](../../../docs/guide.md#easy-inference-directly-on-a-wsi)
+for the call shape. Models with `extra_preprocess` (graph/reference-bank builders)
 aren't wired to WSI-only assets yet and only support the named-config predict
 path.
