@@ -238,8 +238,8 @@ def _git_commit(repo_root: str) -> Optional[str]:
     return result.stdout.strip()
 
 
-def _write_manifest(cfg, payload: Dict[str, Any], action: str, output_dir: str) -> str:
-    os.makedirs(output_dir, exist_ok=True)
+def _write_manifest(cfg, payload: Dict[str, Any], action: str, manifest_path: str) -> str:
+    os.makedirs(os.path.dirname(manifest_path), exist_ok=True)
     manifest = {
         "api": "STPred",
         "action": action,
@@ -259,7 +259,6 @@ def _write_manifest(cfg, payload: Dict[str, Any], action: str, output_dir: str) 
         "data_config_sha256": _sha256_file(payload.get("data_config")),
         "model_config_sha256": _sha256_file(payload.get("model_config")),
     }
-    manifest_path = os.path.join(output_dir, "manifest.yaml")
     with open(manifest_path, "w") as f:
         yaml.dump(manifest, f, allow_unicode=True, sort_keys=False, default_flow_style=False)
     return manifest_path
@@ -351,8 +350,31 @@ def _run_single_model_action(payload: Dict[str, Any]) -> Dict[str, Any]:
         gpu_id=payload["gpu_id"],
     ):
         cfg = _build_runtime_cfg(payload)
-        manifest_dir = cfg.GENERAL.log_dir if action in {"train", "evaluate"} else os.path.join(cfg.DATA.pred_path, f"fold{cfg.DATA.fold}")
-        manifest_path = _write_manifest(cfg, payload, action, manifest_dir)
+        if action in {"train", "evaluate"}:
+            manifest_path = _write_manifest(cfg, payload, action, os.path.join(cfg.GENERAL.log_dir, "manifest.yaml"))
+        elif cfg.DATA.name.startswith("_wsi_predict/"):
+            # WSI-predict output has no per-target directory (see
+            # cfg.DATA.pred_path below), and output_dir is commonly reused
+            # across separate predict() calls on different slides/batches —
+            # write one manifest per SAMPLE (not one per call) so visualize()
+            # can always find the right one by sample name alone, and a
+            # later call can't silently overwrite an earlier one's
+            # provenance record for a still-relevant sample.
+            manifests_dir = os.path.join(cfg.DATA.output_dir, "_wsi_predict", "manifests")
+            try:
+                sample_ids = pd.read_csv(os.path.join(cfg.DATA.meta_dir, "ids.csv"))["sample_id"].dropna().astype(str).tolist()
+            except Exception:
+                sample_ids = []
+            if not sample_ids:
+                sample_ids = [cfg.DATA.name.split("/", 1)[1]]
+            manifest_path = None
+            for sample_id in sample_ids:
+                manifest_path = _write_manifest(cfg, payload, action, os.path.join(manifests_dir, f"{sample_id}.yaml"))
+        else:
+            manifest_path = _write_manifest(
+                cfg, payload, action,
+                os.path.join(cfg.DATA.pred_path, f"fold{cfg.DATA.fold}", "manifest.yaml"),
+            )
         setup_env(cfg)
 
         if action == "train":
@@ -775,7 +797,16 @@ def _build_runtime_cfg(payload: Dict[str, Any]):
             cfg.DATA.genes_override = overlap["genes"]
             cfg.DATA.num_outputs = len(overlap["genes"])
             cfg.DATA.gene_output_indices = overlap["indices"]
-        cfg.DATA.pred_path = f"{cfg.DATA.output_dir}/{cfg.DATA.name}/{cfg.MODEL.name}/{ref_data_config}"
+        if payload.get("batch_size"):
+            cfg.DATA.test_dataloader.batch_size = payload["batch_size"]
+        if cfg.DATA.name.startswith("_wsi_predict/"):
+            # No per-target (slide-name) directory for WSI-predict output —
+            # samples are already distinguished by their own filename, and
+            # output_dir is commonly reused across separate predict() calls
+            # on different slides/assets.
+            cfg.DATA.pred_path = f"{cfg.DATA.output_dir}/_wsi_predict/predictions/{cfg.MODEL.name}/{ref_data_config}"
+        else:
+            cfg.DATA.pred_path = f"{cfg.DATA.output_dir}/{cfg.DATA.name}/{cfg.MODEL.name}/{ref_data_config}"
 
     cfg.MODEL.num_genes = cfg.DATA.get("num_genes", cfg.MODEL.get("num_genes", None))
     cfg.DATA.mode = {"train": "cv", "evaluate": "eval", "predict": "inference"}[action]
@@ -1290,6 +1321,8 @@ class STPred:
         gene_list: Optional[Sequence[str]] = None,
         wsi_dir: Optional[str] = None,
         overwrite: Optional[bool] = None,
+        coordinates: Optional[str] = None,
+        batch_size: Optional[int] = 32,
     ) -> BenchmarkResult:
         """Run prediction/inference for all (or selected) models.
 
@@ -1309,10 +1342,31 @@ class STPred:
         patch/embedding re-extraction for this call only; left unset (the
         default), it falls back to this instance's `preprocess_overrides`
         (if any set `"overwrite"`) rather than silently forcing `False`.
+
+        `coordinates` — path to an `.h5ad` (patch centers read from
+        `obsm['spatial']`) or `.csv` (`x`/`y` columns) file of patch-CENTER
+        coordinates — crops patches at exactly those locations instead of
+        running tissue segmentation + automatic tiling. Only valid when
+        `data` is a single WSI file (raises otherwise). If patches were
+        already extracted into `output_dir` by an earlier call (e.g. a
+        tissue-seg run), pass `overwrite=True` too, or the old patches are
+        reused unchanged.
+
+        `batch_size` overrides how many patches are batched together per
+        model forward pass during prediction — defaults to 32 (the data
+        config's own `DATA.test_dataloader.batch_size`, usually 1, is used
+        only if `batch_size=None` is passed explicitly). Raise or lower it
+        depending on GPU memory and slide size.
         """
 
         train_data = train_data or self.state.get("internal_data")
         kind = _classify_predict_target(data, repo_root=self.repo_root)
+        if coordinates is not None and kind != "wsi_file":
+            raise ValueError(
+                f"predict(coordinates=...) is only supported when data is a single "
+                f"WSI file — {data!r} was classified as {kind!r}. Coordinates are "
+                "tied to one slide's own pixel space."
+            )
         if kind != "named_config":
             if not output_dir:
                 raise ValueError(
@@ -1329,6 +1383,7 @@ class STPred:
                 )
             data = self._materialize_wsi_data_config(
                 data, kind, output_dir, wsi_dir=wsi_dir, overwrite=overwrite,
+                coords_path=coordinates,
             )
             self.preprocess(data, skip_model_preprocess=True, models=models, overwrite=overwrite)
 
@@ -1349,6 +1404,7 @@ class STPred:
             train_data=train_data,
             models=models,
             gene_list=gene_list,
+            batch_size=batch_size,
         )
         self.state["external_data"] = data
         self.state["predict_results"][data] = results
@@ -1416,15 +1472,20 @@ class STPred:
         expr = np.asarray(adata[:, gene].X).ravel()
         coords = np.asarray(adata.obsm["spatial"])
 
-        # Every predict() run writes manifest.yaml into the same fold<k>
-        # directory as the sample .h5ad files it produced (see
-        # _write_manifest / _run_single_model_action), with the exact data
-        # config name it ran against — read that directly instead of
-        # guessing it back from the output directory layout.
+        # Every predict() run writes a manifest with the exact data config
+        # name it ran against — read that directly instead of guessing it
+        # back from the output directory layout. Named-config predict()
+        # writes manifest.yaml into the same fold<k> directory as the
+        # sample .h5ad files; WSI-predict output has no per-target
+        # directory (output_dir is commonly reused across separate
+        # predict() calls), so it writes one manifest per sample instead,
+        # under output_dir/_wsi_predict/manifests/<sample>.yaml.
         wsi_path = None
         data_name = None
         data_dir = None
         manifest_path = os.path.join(os.path.dirname(h5ad_path), "manifest.yaml")
+        if not os.path.isfile(manifest_path):
+            manifest_path = os.path.join(output_dir, "_wsi_predict", "manifests", f"{sample}.yaml")
         if os.path.isfile(manifest_path):
             data_name = _load_yaml_file(manifest_path).get("data")
             if data_name:
@@ -1506,6 +1567,17 @@ class STPred:
             save_path = _abs_path(self.repo_root, save_path)
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
             fig.savefig(save_path, dpi=150, bbox_inches="tight")
+            # Show inline when running in a notebook. Reads back the saved
+            # PNG (not the live Figure) so this works regardless of the
+            # "Agg" backend forced above, and no-ops harmlessly outside a
+            # notebook or without IPython installed.
+            try:
+                from IPython import get_ipython
+                from IPython.display import Image as IPImage, display
+                if get_ipython() is not None:
+                    display(IPImage(filename=save_path))
+            except ImportError:
+                pass
         finally:
             plt.close(fig)
         return save_path
@@ -1670,6 +1742,7 @@ class STPred:
         output_dir: str,
         wsi_dir: Optional[str] = None,
         overwrite: Optional[bool] = None,
+        coords_path: Optional[str] = None,
     ) -> str:
         """Auto-write config/data/_wsi_predict/<name>.yaml for a WSI-path
         predict() target, so the rest of the pipeline (resolve_data_config
@@ -1681,9 +1754,7 @@ class STPred:
         hand-edit.
         """
         # normpath so two calls that mean the same directory (trailing
-        # slash, "./", ".." segments, ...) canonicalize to the same string
-        # — both for config["DATA"]["output_dir"] and for the disambiguation
-        # digest below, which must be stable across equivalent spellings.
+        # slash, "./", ".." segments, ...) canonicalize to the same string.
         output_dir = os.path.normpath(_abs_path(self.repo_root, output_dir))
         # Resolve once, relative to repo_root (not cwd) — matching
         # _classify_predict_target and every other path in this file — so
@@ -1693,13 +1764,12 @@ class STPred:
         raw_name = os.path.basename(abs_data.rstrip(os.sep))
         if kind == "wsi_file":
             raw_name = os.path.splitext(raw_name)[0]
+        # Named only by the slide's own basename: two predict() calls on
+        # same-named slides from different source locations sharing an
+        # output_dir will collide on this config (last predict() to run
+        # wins) — acceptable given each call regenerates it fresh anyway;
+        # keep output_dir per-slide-name if that matters for your workflow.
         safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw_name).strip("_") or "wsi_predict"
-        # Disambiguate by source path + output_dir: two predict() calls on
-        # same-named slides from different locations (or the same slide
-        # re-run into a different output_dir) must not share — and race on
-        # — the same materialized config file.
-        digest = hashlib.sha256(f"{abs_data}::{output_dir}".encode()).hexdigest()[:10]
-        safe_name = f"{safe_name}_{digest}"
         name = f"_wsi_predict/{safe_name}"
         config_path = os.path.join(self.repo_root, "config", "data", f"{name}.yaml")
 
@@ -1756,6 +1826,8 @@ class STPred:
         # over a user's preprocess_overrides={"overwrite": True} default.
         if overwrite is not None:
             config["preprocess"]["overwrite"] = overwrite
+        if coords_path is not None:
+            config["preprocess"]["coords_path"] = _abs_path(self.repo_root, coords_path)
         self._write_yaml_template(config_path, config, overwrite=True)
         return name
 
@@ -2213,6 +2285,7 @@ class STPred:
         train_data: Optional[str] = None,
         models: Optional[Sequence[str]] = None,
         gene_list: Optional[Sequence[str]] = None,
+        batch_size: Optional[int] = None,
     ) -> Dict[str, Any]:
         data_cfg = self._resolve_data(data)
         train_data = train_data or data
@@ -2247,6 +2320,7 @@ class STPred:
                     "use_wandb": self.use_wandb,
                     "wandb_project": self.wandb_project,
                     "gene_list": list(gene_list) if gene_list is not None else None,
+                    "batch_size": batch_size,
                 }
                 training_pipeline = runtime_config.get("MODEL", {}).get("training_pipeline", {})
                 if isinstance(training_pipeline, str):
