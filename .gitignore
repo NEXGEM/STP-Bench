@@ -1,6 +1,7 @@
 logs/*
 output/*
 local
+notebooks/
 
 /DeepSpotM
 
