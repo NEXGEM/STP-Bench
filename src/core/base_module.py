@@ -1,5 +1,6 @@
 
 import os
+import sys
 import json
 import inspect
 import importlib
@@ -89,18 +90,33 @@ class BaseModule(pl.LightningModule):
         super().optimizer_step(*args, **kwargs)
         self.adapter.after_optimizer_step(self)
 
-    def _slice_gene_outputs(self, logits, label):
+    def _slice_gene_outputs(self, logits):
         """Slice a fixed-width model output down to the genes actually
-        evaluable for this run (external evaluation against a dataset that
-        doesn't measure the model's full training gene panel — see
-        _external_gene_overlap in api/stpbench.py). No-op when the shapes
-        already match (internal eval, or a zero-shot model whose output
-        already tracks the requested gene list)."""
+        needed for this run — either an external evaluation against a
+        dataset that doesn't measure the model's full training gene panel
+        (see _external_gene_overlap in api/stpbench.py), or a user-supplied
+        predict(gene_list=...) restriction (see _user_gene_overlap).
+
+        Some adapters (zero-shot models like DeepSpotM/STPath) already
+        narrow their own output to the requested gene subset inside
+        forward() itself, via dataset.genes — so `logits` may already be
+        the target width by the time it gets here. Slicing again would
+        apply gene_output_indices (absolute positions into the *full*
+        training panel) to an already-narrow tensor, which is wrong at
+        best and an out-of-range index_select at worst. Compare against
+        the target width directly rather than inferring "already sliced"
+        from the presence of `label` (predict_step has none)."""
         gene_output_indices = self.config.DATA.get('gene_output_indices')
-        if gene_output_indices is not None and logits.shape[-1] != label.shape[-1]:
+        if gene_output_indices is None or logits.shape[-1] == len(gene_output_indices):
+            return logits
+        # gene_output_indices is fixed for the whole run — cache the index
+        # tensor instead of rebuilding it from a Python list on every
+        # batch (this is called from every train/val/test/predict step).
+        idx = getattr(self, '_gene_output_idx', None)
+        if idx is None or idx.device != logits.device:
             idx = torch.as_tensor(gene_output_indices, dtype=torch.long, device=logits.device)
-            logits = logits.index_select(-1, idx)
-        return logits
+            self._gene_output_idx = idx
+        return logits.index_select(-1, idx)
 
     def validation_step(self, batch, batch_idx):
         batch = self.adapter.prepare_batch(self, batch, stage='val')
@@ -109,7 +125,7 @@ class BaseModule(pl.LightningModule):
 
         #---->Loss
         if 'logits' in results_dict:
-            logits = self._slice_gene_outputs(results_dict['logits'], label)
+            logits = self._slice_gene_outputs(results_dict['logits'])
 
             val_metric = self.valid_metrics(logits, label)
             val_metric = {k: v.nanmean() if len(v.shape) > 0 else v for k, v in val_metric.items()}
@@ -131,7 +147,7 @@ class BaseModule(pl.LightningModule):
             
         
         #---->Loss
-        logits = self._slice_gene_outputs(results_dict['logits'], label)
+        logits = self._slice_gene_outputs(results_dict['logits'])
         # label = batch['label']
 
         test_metric = self.test_metrics(logits, label)
@@ -182,10 +198,10 @@ class BaseModule(pl.LightningModule):
         
         batch = self.adapter.prepare_predict_batch(self, batch, dataset)
         results_dict = self.adapter.forward(self, batch, phase='test')
-        
+
         #---->Loss
-        pred = results_dict['logits']
-        
+        pred = self._slice_gene_outputs(results_dict['logits'])
+
         self.predictions.append(pred)
         
         return pred, _id
@@ -240,8 +256,8 @@ class BaseModule(pl.LightningModule):
         preds = preds.detach().cpu().numpy().astype(np.float32)
         
         if self.config.DATA.mode == 'inference':
-            name, genes = self.adapter.inference_prediction_context(self)
-            
+            name, genes, coords = self.adapter.inference_prediction_context(self)
+
             gene_type = self.config.DATA.gene_type
             num_genes = self.config.DATA.num_genes
             
@@ -264,6 +280,20 @@ class BaseModule(pl.LightningModule):
                 X=preds,
                 var=pd.DataFrame(index=genes)
             )
+            if coords is not None:
+                # suppress_library_output() (see api/output_control.py)
+                # redirects sys.stdout for the whole predict run and
+                # silences UserWarning, so warnings.warn()/print() here
+                # would vanish -- write straight to the real stderr instead.
+                if len(coords) == adata_pred.n_obs:
+                    adata_pred.obsm['spatial'] = np.asarray(coords)
+                else:
+                    print(
+                        f"[STPBench] WARNING: spatial coords count ({len(coords)}) "
+                        f"does not match prediction count ({adata_pred.n_obs}) for "
+                        f"{name}; skipping obsm['spatial'].",
+                        file=sys.stderr,
+                    )
         else:
             name, genes, id2dir = self.adapter.evaluation_prediction_context(self, batch_idx)
             if isinstance(genes, dict):
@@ -321,6 +351,7 @@ class BaseModule(pl.LightningModule):
             X=adata_pred.X,
             obs=_native_df(adata_pred.obs),
             var=_native_df(adata_pred.var),
+            obsm=dict(adata_pred.obsm),
         ).write(output_path)
     
     def load_model(self):

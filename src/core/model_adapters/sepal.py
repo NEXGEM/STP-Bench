@@ -20,7 +20,7 @@ class SepalAdapter(ModelAdapter):
 
     def inference_prediction_context(self, module):
         dataloader = module._trainer.predict_dataloaders
-        return dataloader.name, getattr(dataloader, "genes", None)
+        return dataloader.name, getattr(dataloader, "genes", None), None
 
     def evaluation_prediction_context(self, module, batch_idx):
         dataloader = module._trainer.test_dataloaders

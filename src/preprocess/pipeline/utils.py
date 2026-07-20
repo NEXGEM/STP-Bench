@@ -5,8 +5,11 @@ from typing import Dict, List, Optional, Tuple
 import torch
 
 
-def setup_paths(output_dir: str) -> Dict[str, str]:
-    """Create emb subdirectories and return a path map for the output directory."""
+def setup_paths(output_dir: str, features: Tuple[str, ...] = ('global', 'neighbor', 'target')) -> Dict[str, str]:
+    """Return a path map for the output directory, creating only the emb
+    subdirectories actually needed (`features`, e.g. from a model's
+    feature_type) — a model like StNet that uses raw patches directly
+    (feature_type: none) needs none of them at all."""
     paths = {
         'patches':          os.path.join(output_dir, 'patches'),
         'patches_neighbor': os.path.join(output_dir, 'patches', 'neighbor'),
@@ -17,8 +20,10 @@ def setup_paths(output_dir: str) -> Dict[str, str]:
         'emb_target':       os.path.join(output_dir, 'emb', 'target'),
         'pos':              os.path.join(output_dir, 'pos'),
     }
-    for key in ('emb_global', 'emb_neighbor', 'emb_target'):
-        os.makedirs(paths[key], exist_ok=True)
+    for feature in features:
+        key = f'emb_{feature}'
+        if key in paths:
+            os.makedirs(paths[key], exist_ok=True)
     return paths
 
 

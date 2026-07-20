@@ -75,7 +75,7 @@ class STDataset(torch.utils.data.Dataset):
         
         if mode == 'inference':
             if wsi_dir is not None:
-                wsi_path = glob(f"{wsi_dir}/{data_id}.*")[0]
+                wsi_path = sorted(glob(f"{wsi_dir}/{data_id}.*"))[0]
                 self.wsi = load_wsi(wsi_path, lazy_init=False)
                 
                 self.name = data_id

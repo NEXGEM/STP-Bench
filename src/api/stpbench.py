@@ -21,7 +21,7 @@ import yaml
 import pandas as pd
 
 from api.benchmark_logger import BenchmarkLogger
-from api.config_resolver import NamedConfig, resolve_data_config, resolve_model_config
+from api.config_resolver import NamedConfig, data_config_exists, resolve_data_config, resolve_model_config
 from api.output_control import suppress_library_output
 from api.result import BenchmarkResult
 
@@ -238,8 +238,8 @@ def _git_commit(repo_root: str) -> Optional[str]:
     return result.stdout.strip()
 
 
-def _write_manifest(cfg, payload: Dict[str, Any], action: str, output_dir: str) -> str:
-    os.makedirs(output_dir, exist_ok=True)
+def _write_manifest(cfg, payload: Dict[str, Any], action: str, manifest_path: str) -> str:
+    os.makedirs(os.path.dirname(manifest_path), exist_ok=True)
     manifest = {
         "api": "STPred",
         "action": action,
@@ -259,7 +259,6 @@ def _write_manifest(cfg, payload: Dict[str, Any], action: str, output_dir: str) 
         "data_config_sha256": _sha256_file(payload.get("data_config")),
         "model_config_sha256": _sha256_file(payload.get("model_config")),
     }
-    manifest_path = os.path.join(output_dir, "manifest.yaml")
     with open(manifest_path, "w") as f:
         yaml.dump(manifest, f, allow_unicode=True, sort_keys=False, default_flow_style=False)
     return manifest_path
@@ -351,8 +350,31 @@ def _run_single_model_action(payload: Dict[str, Any]) -> Dict[str, Any]:
         gpu_id=payload["gpu_id"],
     ):
         cfg = _build_runtime_cfg(payload)
-        manifest_dir = cfg.GENERAL.log_dir if action in {"train", "evaluate"} else os.path.join(cfg.DATA.pred_path, f"fold{cfg.DATA.fold}")
-        manifest_path = _write_manifest(cfg, payload, action, manifest_dir)
+        if action in {"train", "evaluate"}:
+            manifest_path = _write_manifest(cfg, payload, action, os.path.join(cfg.GENERAL.log_dir, "manifest.yaml"))
+        elif cfg.DATA.name.startswith("_wsi_predict/"):
+            # WSI-predict output has no per-target directory (see
+            # cfg.DATA.pred_path below), and output_dir is commonly reused
+            # across separate predict() calls on different slides/batches —
+            # write one manifest per SAMPLE (not one per call) so visualize()
+            # can always find the right one by sample name alone, and a
+            # later call can't silently overwrite an earlier one's
+            # provenance record for a still-relevant sample.
+            manifests_dir = os.path.join(cfg.DATA.output_dir, "_wsi_predict", "manifests")
+            try:
+                sample_ids = pd.read_csv(os.path.join(cfg.DATA.meta_dir, "ids.csv"))["sample_id"].dropna().astype(str).tolist()
+            except Exception:
+                sample_ids = []
+            if not sample_ids:
+                sample_ids = [cfg.DATA.name.split("/", 1)[1]]
+            manifest_path = None
+            for sample_id in sample_ids:
+                manifest_path = _write_manifest(cfg, payload, action, os.path.join(manifests_dir, f"{sample_id}.yaml"))
+        else:
+            manifest_path = _write_manifest(
+                cfg, payload, action,
+                os.path.join(cfg.DATA.pred_path, f"fold{cfg.DATA.fold}", "manifest.yaml"),
+            )
         setup_env(cfg)
 
         if action == "train":
@@ -532,6 +554,68 @@ def _external_gene_overlap(train_gene_path: str, ext_meta_dir: str, ext_data_dir
     }
 
 
+def _user_gene_overlap(
+    train_gene_path: str, requested_genes: Sequence[str]
+) -> Tuple[Optional[Dict[str, Any]], List[str]]:
+    """Restrict a model's fixed-width output to a user-requested gene subset.
+
+    Same {'genes': [...], 'indices': [...]} shape/training-panel-order
+    contract as _external_gene_overlap, but driven by an explicit
+    predict(gene_list=...) instead of by what an external dataset happens
+    to measure. Returns (None, requested_genes) if the training panel
+    can't be read, or (None, missing) if none of the requested genes are
+    in the training panel. 'missing' always lists requested genes not
+    found in the training panel, for the caller to warn about.
+    """
+    requested_genes = list(requested_genes)
+    if not os.path.isfile(train_gene_path):
+        return None, requested_genes
+    import json as _json
+
+    with open(train_gene_path) as f:
+        train_genes = _json.load(f)['genes']
+    train_index = {gene: i for i, gene in enumerate(train_genes)}
+
+    missing = [gene for gene in requested_genes if gene not in train_index]
+    overlap_indices = sorted({train_index[gene] for gene in requested_genes if gene in train_index})
+    if not overlap_indices:
+        return None, missing
+    return {
+        "genes": [train_genes[i] for i in overlap_indices],
+        "indices": overlap_indices,
+    }, missing
+
+
+def _classify_predict_target(data: str, repo_root: str = ".") -> str:
+    """Classify predict()'s `data` argument.
+
+    Checks whether a real, on-disk named config exists first — it always
+    wins outright, so this can't be confused by a coincidentally-named
+    relative directory/file sitting under repo_root. This is a pure
+    existence check (no YAML parsing), so a malformed-but-present config
+    doesn't get silently reinterpreted as a WSI path — it's classified as
+    "named_config" here and lets resolve_data_config's real parse error
+    surface later, instead of masking it. Only falls through to filesystem
+    inspection (resolved relative to repo_root, matching every other path
+    in this file) when no such config exists at all.
+    """
+    if data_config_exists(data, repo_root=repo_root):
+        return "named_config"
+
+    from preprocess.prepare_data import _WSI_EXTENSIONS, discover_wsi_files
+
+    abs_data = _abs_path(repo_root, data)
+    if os.path.isdir(abs_data):
+        if glob(os.path.join(abs_data, "patches", "*.h5")):
+            return "asset_dir"
+        if discover_wsi_files(abs_data):
+            return "wsi_dir"
+        return "named_config"
+    if os.path.isfile(abs_data) and abs_data.lower().endswith(_WSI_EXTENSIONS):
+        return "wsi_file"
+    return "named_config"
+
+
 def _build_runtime_cfg(payload: Dict[str, Any]):
     from addict import Dict
     from core import load_config
@@ -665,6 +749,7 @@ def _build_runtime_cfg(payload: Dict[str, Any]):
             cfg.DATA.ref_asset_dir = cfg.DATA.train_data_dir
             ref_data_config = cfg.DATA.get("name", payload["data"])
             cfg.DATA.data_dir = current_data.data_dir
+            cfg.DATA.meta_dir = current_data.get("meta_dir", current_data.data_dir)
             cfg.DATA.output_dir = current_data.output_dir
             cfg.DATA.name = payload["data"]
             cfg.DATA.save_predictions = save_predictions
@@ -692,7 +777,36 @@ def _build_runtime_cfg(payload: Dict[str, Any]):
         gene_path = f"{train_meta_dir}/{cfg.DATA.gene_type}_{cfg.DATA.num_genes}genes.json"
         cfg.MODEL.gene_path = gene_path if os.path.isfile(gene_path) else f"{train_data_dir}/{cfg.DATA.gene_type}_{cfg.DATA.num_genes}genes.json"
         cfg.MODEL.ref_data_dir = train_meta_dir
-        cfg.DATA.pred_path = f"{cfg.DATA.output_dir}/{cfg.DATA.name}/{cfg.MODEL.name}/{ref_data_config}"
+        if payload.get("gene_list"):
+            overlap, missing = _user_gene_overlap(cfg.MODEL.gene_path, payload["gene_list"])
+            if missing:
+                # Use the payload's own logger, not warnings.warn(): this runs
+                # inside _run_single_model_action's suppress_library_output(),
+                # which filters out UserWarning by category and would
+                # otherwise silently swallow this.
+                _payload_logger(payload).warning(
+                    "gene_list_genes_missing",
+                    genes=",".join(missing),
+                    gene_path=cfg.MODEL.gene_path,
+                )
+            if overlap is None:
+                raise ValueError(
+                    "None of the requested gene_list genes are in the training "
+                    f"gene panel ({cfg.MODEL.gene_path})."
+                )
+            cfg.DATA.genes_override = overlap["genes"]
+            cfg.DATA.num_outputs = len(overlap["genes"])
+            cfg.DATA.gene_output_indices = overlap["indices"]
+        if payload.get("batch_size"):
+            cfg.DATA.test_dataloader.batch_size = payload["batch_size"]
+        if cfg.DATA.name.startswith("_wsi_predict/"):
+            # No per-target (slide-name) directory for WSI-predict output —
+            # samples are already distinguished by their own filename, and
+            # output_dir is commonly reused across separate predict() calls
+            # on different slides/assets.
+            cfg.DATA.pred_path = f"{cfg.DATA.output_dir}/_wsi_predict/predictions/{cfg.MODEL.name}/{ref_data_config}"
+        else:
+            cfg.DATA.pred_path = f"{cfg.DATA.output_dir}/{cfg.DATA.name}/{cfg.MODEL.name}/{ref_data_config}"
 
     cfg.MODEL.num_genes = cfg.DATA.get("num_genes", cfg.MODEL.get("num_genes", None))
     cfg.DATA.mode = {"train": "cv", "evaluate": "eval", "predict": "inference"}[action]
@@ -701,6 +815,49 @@ def _build_runtime_cfg(payload: Dict[str, Any]):
 
 def _abs_path(repo_root: str, path: str) -> str:
     return path if os.path.isabs(path) else os.path.join(repo_root, path)
+
+
+def _estimate_patch_spacing(coords) -> Optional[float]:
+    """Fallback patch footprint when trident's own `patch_size_level0` attr
+    isn't available (e.g. a legacy/non-trident coords file): the median
+    nearest-neighbor distance between patch centers is a reasonable stand-in
+    for the true non-overlapping patch size."""
+    import numpy as np
+    if len(coords) < 2:
+        return None
+    try:
+        from scipy.spatial import cKDTree
+        dists, _ = cKDTree(coords).query(coords, k=2)
+        nn_dist = dists[:, 1]
+    except Exception:
+        return None
+    nn_dist = nn_dist[nn_dist > 0]
+    return float(np.median(nn_dist)) if len(nn_dist) else None
+
+
+def _draw_patches(ax, coords, values, patch_px: Optional[float]):
+    """Render one square per patch, sized to its true non-overlapping
+    footprint (`patch_px`), colored by `values`. Falls back to small dot
+    markers only if no footprint size could be determined at all — patches
+    are a dense grid, not sparse spots, and a fixed small dot misleadingly
+    looks like sparse Visium-style spots regardless of true patch density."""
+    import numpy as np
+    import matplotlib.colors as mcolors
+    from matplotlib.collections import PatchCollection
+    from matplotlib.patches import Rectangle
+
+    if not patch_px or patch_px <= 0:
+        return ax.scatter(coords[:, 0], coords[:, 1], c=values, cmap="viridis", s=8, alpha=0.8)
+
+    rects = [
+        Rectangle((x - patch_px / 2, y - patch_px / 2), patch_px, patch_px)
+        for x, y in coords
+    ]
+    norm = mcolors.Normalize(vmin=np.min(values), vmax=np.max(values))
+    collection = PatchCollection(rects, cmap="viridis", norm=norm)
+    collection.set_array(np.asarray(values))
+    ax.add_collection(collection)
+    return collection
 
 
 def _latest_timestamp(log_dir_parent: str) -> Optional[str]:
@@ -871,12 +1028,9 @@ class STPred:
         }
         return stp
 
-    @classmethod
-    def init_data_config(cls, name: str, output: Optional[str] = None, repo_root: str = ".") -> str:
-        """Write a minimal editable data config template and return its path."""
-
-        output = output or os.path.join(repo_root, "config", "data", f"{name}.yaml")
-        config = {
+    @staticmethod
+    def _data_config_template(name: str) -> Dict[str, Any]:
+        return {
             "GENERAL": {
                 "seed": 2021,
                 "log_path": "./logs",
@@ -897,6 +1051,7 @@ class STPred:
             },
             "DATA": {
                 "data_dir": "/path/to/processed_data",
+                "meta_dir": f"input/{name}",
                 "output_dir": "output/pred",
                 "dataset_name": "STDataset",
                 "gene_type": "hmhvg",
@@ -907,17 +1062,26 @@ class STPred:
                 "smooth": False,
                 "model_name": "uni_v2",
                 "load_level": "patch",
+                "tech": "Visium",
                 "train_dataloader": {"batch_size": 128, "num_workers": 4, "pin_memory": False, "shuffle": True},
                 "test_dataloader": {"batch_size": 1, "num_workers": 4, "pin_memory": False, "shuffle": False},
             },
             "preprocess": {
                 "mode": "raw",
+                "platform": "visium",
                 "input_dir": "/path/to/raw_data",
                 "output_dir": "/path/to/processed_data",
+                "meta_dir": f"input/{name}",
                 "overwrite": False,
             },
         }
-        cls._write_yaml_template(output, config)
+
+    @classmethod
+    def init_data_config(cls, name: str, output: Optional[str] = None, repo_root: str = ".") -> str:
+        """Write a minimal editable data config template and return its path."""
+
+        output = output or os.path.join(repo_root, "config", "data", f"{name}.yaml")
+        cls._write_yaml_template(output, cls._data_config_template(name))
         return output
 
     @classmethod
@@ -940,9 +1104,9 @@ class STPred:
         return output
 
     @staticmethod
-    def _write_yaml_template(path: str, config: Dict[str, Any]) -> None:
+    def _write_yaml_template(path: str, config: Dict[str, Any], overwrite: bool = False) -> None:
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-        if os.path.exists(path):
+        if os.path.exists(path) and not overwrite:
             raise FileExistsError(f"Config already exists: {path}")
         with open(path, "w") as f:
             yaml.dump(config, f, allow_unicode=True, sort_keys=False, default_flow_style=False)
@@ -995,8 +1159,9 @@ class STPred:
         # with that context, not here where `data` is treated as a
         # standalone/primary dataset.
         skip_model_preprocess = overrides.pop("skip_model_preprocess", False)
+        models = overrides.pop("models", None)
         data_cfg = self._resolve_data(data)
-        model_cfgs = self._resolve_models()
+        model_cfgs = self._resolve_models(models)
         plan = self._build_preprocess_plan(
             data_cfg, model_cfgs, overrides, skip_model_preprocess=skip_model_preprocess,
         )
@@ -1056,7 +1221,7 @@ class STPred:
                 ):
                     _run_command(task["command"], cwd=task.get("cwd"), log_path=task.get("log_path"))
 
-            if plan["base_config"].get("mode") == "inference":
+            if plan["base_config"].get("mode") in ("inference", "wsi_only"):
                 self.state["external_data"] = data
             else:
                 self.state["internal_data"] = data
@@ -1151,13 +1316,80 @@ class STPred:
         folds: Optional[Sequence[int]] = None,
         timestamps: Optional[Dict[str, str] | str] = None,
         train_data: Optional[str] = None,
+        models: Optional[Sequence[str]] = None,
+        output_dir: Optional[str] = None,
+        gene_list: Optional[Sequence[str]] = None,
+        wsi_dir: Optional[str] = None,
+        overwrite: Optional[bool] = None,
+        coordinates: Optional[str] = None,
+        batch_size: Optional[int] = 32,
     ) -> BenchmarkResult:
-        """Run prediction/inference for all models on an external dataset."""
+        """Run prediction/inference for all (or selected) models.
+
+        `data` accepts a named data config (`data="ncche/xenium"`), a
+        single WSI file (single-slide prediction), a directory of WSI
+        files (batch prediction, one row per slide), or an
+        already-preprocessed asset directory (one already containing
+        `patches/*.h5`). For the latter three, `output_dir` is required
+        to say where extracted patches/embeddings/predictions get
+        written, and a checkpoint must be resolvable via `ckpt_path` or
+        `train_data` (or a prior `train()`/`from_run()` call).
+
+        `models` selects a per-call subset of models to run, overriding
+        (not mutating) the models this `STPred` instance was constructed
+        with. `gene_list` restricts predicted genes to a user-supplied
+        subset of the training gene panel. `overwrite` forces WSI
+        patch/embedding re-extraction for this call only; left unset (the
+        default), it falls back to this instance's `preprocess_overrides`
+        (if any set `"overwrite"`) rather than silently forcing `False`.
+
+        `coordinates` — path to an `.h5ad` (patch centers read from
+        `obsm['spatial']`) or `.csv` (`x`/`y` columns) file of patch-CENTER
+        coordinates — crops patches at exactly those locations instead of
+        running tissue segmentation + automatic tiling. Only valid when
+        `data` is a single WSI file (raises otherwise). If patches were
+        already extracted into `output_dir` by an earlier call (e.g. a
+        tissue-seg run), pass `overwrite=True` too, or the old patches are
+        reused unchanged.
+
+        `batch_size` overrides how many patches are batched together per
+        model forward pass during prediction — defaults to 32 (the data
+        config's own `DATA.test_dataloader.batch_size`, usually 1, is used
+        only if `batch_size=None` is passed explicitly). Raise or lower it
+        depending on GPU memory and slide size.
+        """
 
         train_data = train_data or self.state.get("internal_data")
+        kind = _classify_predict_target(data, repo_root=self.repo_root)
+        if coordinates is not None and kind != "wsi_file":
+            raise ValueError(
+                f"predict(coordinates=...) is only supported when data is a single "
+                f"WSI file — {data!r} was classified as {kind!r}. Coordinates are "
+                "tied to one slide's own pixel space."
+            )
+        if kind != "named_config":
+            if not output_dir:
+                raise ValueError(
+                    f"predict(data={data!r}) was classified as a {kind!r} target "
+                    "(WSI file/dir or an already-preprocessed asset dir), which "
+                    "requires output_dir to say where extracted patches/"
+                    "embeddings/predictions are written."
+                )
+            if ckpt_path is None and train_data is None:
+                raise ValueError(
+                    f"predict(data={data!r}) requires either ckpt_path or "
+                    "train_data (or a prior train()/from_run() call) to resolve "
+                    "a checkpoint."
+                )
+            data = self._materialize_wsi_data_config(
+                data, kind, output_dir, wsi_dir=wsi_dir, overwrite=overwrite,
+                coords_path=coordinates,
+            )
+            self.preprocess(data, skip_model_preprocess=True, models=models, overwrite=overwrite)
+
         if timestamps is None and train_data is not None:
             timestamps = self._timestamps_for_data(train_data)
-        model_cfgs = self._resolve_models()
+        model_cfgs = self._resolve_models(models)
         ext_data_cfg = self._resolve_data(data)
         self._warn_missing_external_base_artifacts(ext_data_cfg, model_cfgs)
         if train_data is not None:
@@ -1170,10 +1402,185 @@ class STPred:
             timestamps=timestamps,
             ckpt_path=ckpt_path,
             train_data=train_data,
+            models=models,
+            gene_list=gene_list,
+            batch_size=batch_size,
         )
         self.state["external_data"] = data
         self.state["predict_results"][data] = results
+        if output_dir:
+            self.state["last_output_dir"] = output_dir
         return results
+
+    def visualize(
+        self,
+        gene: str,
+        sample: str,
+        output_dir: Optional[str] = None,
+        model: Optional[str] = None,
+        save_path: Optional[str] = None,
+    ) -> str:
+        """Render a predicted gene's expression for one sample as a heatmap,
+        overlaid on the slide's own thumbnail when the original WSI can be
+        located, falling back to a plain spatial scatter otherwise.
+
+        `output_dir` defaults to whatever was passed to the most recent
+        `predict()` call. Returns the saved PNG path.
+        """
+        import numpy as np
+        import scanpy as sc
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        output_dir = output_dir or self.state.get("last_output_dir")
+        if not output_dir:
+            raise ValueError(
+                "visualize() needs output_dir — none was given and no prior "
+                "predict() call set one."
+            )
+        output_dir = _abs_path(self.repo_root, output_dir)
+
+        candidates = sorted(glob(os.path.join(output_dir, "**", f"{sample}.h5ad"), recursive=True))
+        if model:
+            candidates = [path for path in candidates if f"{os.sep}{model}{os.sep}" in path]
+        if not candidates:
+            raise ValueError(
+                f"No prediction .h5ad found for sample={sample!r} under output_dir={output_dir!r}"
+                + (f" and model={model!r}" if model else "")
+            )
+        if len(candidates) > 1:
+            raise ValueError(
+                f"Multiple predictions found for sample={sample!r} under output_dir={output_dir!r}; "
+                "pass model= to disambiguate:\n" + "\n".join(f"- {path}" for path in candidates)
+            )
+        h5ad_path = candidates[0]
+
+        adata = sc.read_h5ad(h5ad_path)
+        if adata.n_obs == 0:
+            raise ValueError(f"Predictions at {h5ad_path!r} have zero samples — nothing to visualize.")
+        if gene not in adata.var_names:
+            available = ", ".join(list(adata.var_names[:10]))
+            raise ValueError(
+                f"Gene {gene!r} not found in predictions at {h5ad_path!r}. "
+                f"Available genes include: {available}..."
+            )
+        if "spatial" not in adata.obsm:
+            raise ValueError(
+                f"Predictions at {h5ad_path!r} have no obsm['spatial'] coordinates to plot."
+            )
+        expr = np.asarray(adata[:, gene].X).ravel()
+        coords = np.asarray(adata.obsm["spatial"])
+
+        # Every predict() run writes a manifest with the exact data config
+        # name it ran against — read that directly instead of guessing it
+        # back from the output directory layout. Named-config predict()
+        # writes manifest.yaml into the same fold<k> directory as the
+        # sample .h5ad files; WSI-predict output has no per-target
+        # directory (output_dir is commonly reused across separate
+        # predict() calls), so it writes one manifest per sample instead,
+        # under output_dir/_wsi_predict/manifests/<sample>.yaml.
+        wsi_path = None
+        data_name = None
+        data_dir = None
+        manifest_path = os.path.join(os.path.dirname(h5ad_path), "manifest.yaml")
+        if not os.path.isfile(manifest_path):
+            manifest_path = os.path.join(output_dir, "_wsi_predict", "manifests", f"{sample}.yaml")
+        if os.path.isfile(manifest_path):
+            data_name = _load_yaml_file(manifest_path).get("data")
+            if data_name:
+                try:
+                    data_cfg = resolve_data_config(data_name, repo_root=self.repo_root)
+                    data_dir = data_cfg.config.get("DATA", {}).get("data_dir")
+                    wsi_dir = data_cfg.config.get("DATA", {}).get("wsi_dir")
+                    if wsi_dir:
+                        wsi_dir = _abs_path(self.repo_root, wsi_dir)
+                        matches = sorted(glob(os.path.join(wsi_dir, f"{sample}.*")))
+                        wsi_path = matches[0] if matches else None
+                except Exception:
+                    pass
+
+        # Patches are extracted as a dense non-overlapping grid, not sparse
+        # Visium-style spots — render them at their true footprint (a square
+        # the size of one patch) rather than an arbitrary small dot, or the
+        # plot misleadingly looks sparse regardless of how densely tiled the
+        # patches actually are. `patch_size_level0` is the pixel footprint of
+        # one patch at the WSI's level-0 (native) resolution, which trident
+        # writes into the same coords .h5 `_read_predict_coords` already
+        # reads (src/core/model_adapters/base.py) — same coordinate space as
+        # `coords` above, so it scales identically.
+        patch_size_level0 = self._patch_footprint_level0(data_dir, sample)
+        if patch_size_level0 is None:
+            patch_size_level0 = _estimate_patch_spacing(coords)
+
+        fig, ax = plt.subplots(figsize=(8, 8))
+        try:
+            plotted_on_thumbnail = False
+            if wsi_path:
+                try:
+                    from trident import load_wsi
+                    wsi = load_wsi(slide_path=wsi_path, lazy_init=False)
+                    max_dimension = 1000
+                    if wsi.width > wsi.height:
+                        thumb_w = max_dimension
+                        thumb_h = int(thumb_w * wsi.height / wsi.width)
+                    else:
+                        thumb_h = max_dimension
+                        thumb_w = int(thumb_h * wsi.width / wsi.height)
+                    thumbnail = wsi.get_thumbnail((thumb_w, thumb_h))
+                    scale = thumb_w / wsi.width
+                    scaled_coords = coords * scale
+                    patch_px = (patch_size_level0 * scale) if patch_size_level0 else None
+                    ax.imshow(thumbnail)
+                    mappable = _draw_patches(ax, scaled_coords, expr, patch_px)
+                    plotted_on_thumbnail = True
+                except Exception as exc:
+                    # Discard any partial thumbnail/patch draw from the
+                    # failed attempt above — otherwise the fallback below
+                    # would layer unscaled, native-pixel-space patches on
+                    # top of a still-visible (and now stale) thumbnail.
+                    ax.cla()
+                    print(
+                        f"[STPBench] WARNING: failed to overlay on WSI thumbnail ({wsi_path!r}): "
+                        f"{exc}; falling back to a plain spatial scatter.",
+                        file=sys.stderr,
+                    )
+
+            if not plotted_on_thumbnail:
+                if not wsi_path:
+                    print(
+                        f"[STPBench] WARNING: could not locate the original WSI for sample={sample!r} "
+                        f"(data={data_name!r}); rendering a plain spatial scatter instead.",
+                        file=sys.stderr,
+                    )
+                mappable = _draw_patches(ax, coords, expr, patch_size_level0)
+                margin = patch_size_level0 or 0
+                ax.set_xlim(coords[:, 0].min() - margin, coords[:, 0].max() + margin)
+                ax.set_ylim(coords[:, 1].max() + margin, coords[:, 1].min() - margin)
+                ax.set_aspect("equal")
+
+            ax.set_title(f"{sample} — {gene}")
+            ax.axis("off")
+            fig.colorbar(mappable, ax=ax, label=gene, fraction=0.046, pad=0.04)
+
+            save_path = save_path or os.path.join(output_dir, "viz", f"{sample}_{gene}.png")
+            save_path = _abs_path(self.repo_root, save_path)
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            fig.savefig(save_path, dpi=150, bbox_inches="tight")
+            # Show inline when running in a notebook. Reads back the saved
+            # PNG (not the live Figure) so this works regardless of the
+            # "Agg" backend forced above, and no-ops harmlessly outside a
+            # notebook or without IPython installed.
+            try:
+                from IPython import get_ipython
+                from IPython.display import Image as IPImage, display
+                if get_ipython() is not None:
+                    display(IPImage(filename=save_path))
+            except ImportError:
+                pass
+        finally:
+            plt.close(fig)
+        return save_path
 
     def check(
         self,
@@ -1303,8 +1710,126 @@ class STPred:
     def _resolve_data(self, data: str) -> NamedConfig:
         return resolve_data_config(data, repo_root=self.repo_root)
 
-    def _resolve_models(self) -> List[NamedConfig]:
-        return [resolve_model_config(model, repo_root=self.repo_root) for model in self.models]
+    def _resolve_models(self, models: Optional[Sequence[str]] = None) -> List[NamedConfig]:
+        return [resolve_model_config(model, repo_root=self.repo_root) for model in (models or self.models)]
+
+    def _patch_footprint_level0(self, data_dir: Optional[str], sample: str) -> Optional[float]:
+        """Read the level0-pixel patch footprint trident stamped onto this
+        sample's coords .h5 (`patch_size_level0`) — same file/lookup pattern
+        as `ModelAdapter._read_predict_coords` (src/core/model_adapters/
+        base.py), so `visualize()` can render patches at their true
+        non-overlapping size. Returns None (not an error) if unavailable —
+        callers fall back to an estimate."""
+        if not data_dir:
+            return None
+        from dataset.path_utils import patch_dir
+        img_dir = patch_dir(_abs_path(self.repo_root, data_dir))
+        for candidate_name in (f"{sample}.h5", f"{sample}_patches.h5"):
+            path = os.path.join(img_dir, candidate_name)
+            if os.path.isfile(path):
+                try:
+                    from trident.IO import read_coords
+                    attrs, _ = read_coords(path)
+                    return attrs.get("patch_size_level0")
+                except Exception:
+                    return None
+        return None
+
+    def _materialize_wsi_data_config(
+        self,
+        data: str,
+        kind: str,
+        output_dir: str,
+        wsi_dir: Optional[str] = None,
+        overwrite: Optional[bool] = None,
+        coords_path: Optional[str] = None,
+    ) -> str:
+        """Auto-write config/data/_wsi_predict/<name>.yaml for a WSI-path
+        predict() target, so the rest of the pipeline (resolve_data_config
+        -> _merged_runtime_config -> _build_runtime_cfg -> _run_models)
+        runs completely unmodified downstream.
+
+        Machine-owned namespace, always overwritten: this is regenerated
+        fresh on every predict() call, not a config a user is expected to
+        hand-edit.
+        """
+        # normpath so two calls that mean the same directory (trailing
+        # slash, "./", ".." segments, ...) canonicalize to the same string.
+        output_dir = os.path.normpath(_abs_path(self.repo_root, output_dir))
+        # Resolve once, relative to repo_root (not cwd) — matching
+        # _classify_predict_target and every other path in this file — so
+        # a relative `data` still resolves correctly under the documented
+        # repo_root != cwd usage pattern (README's repo_root parameter).
+        abs_data = os.path.normpath(_abs_path(self.repo_root, data))
+        raw_name = os.path.basename(abs_data.rstrip(os.sep))
+        if kind == "wsi_file":
+            raw_name = os.path.splitext(raw_name)[0]
+        # Named only by the slide's own basename: two predict() calls on
+        # same-named slides from different source locations sharing an
+        # output_dir will collide on this config (last predict() to run
+        # wins) — acceptable given each call regenerates it fresh anyway;
+        # keep output_dir per-slide-name if that matters for your workflow.
+        safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw_name).strip("_") or "wsi_predict"
+        name = f"_wsi_predict/{safe_name}"
+        config_path = os.path.join(self.repo_root, "config", "data", f"{name}.yaml")
+
+        # Both kinds read raw input from `data` and write everything else —
+        # refreshed ids.csv, freshly-extracted embeddings a chosen model
+        # might still need, and the scratch emb/ subdirectories
+        # DataPipeline._setup_dirs() creates unconditionally just from
+        # being constructed — to the separate writable `output_dir`, never
+        # into `data`, which may be a shared/read-only asset directory.
+        # DATA.data_dir is `output_dir` for both kinds (so patch AND
+        # embedding reads at predict time agree with wherever extraction
+        # actually wrote embeddings); for asset_dir, output_dir/patches is
+        # symlinked to the real (possibly read-only) patches below instead
+        # of physically extracting them (mode='inference', vs 'wsi_only'
+        # which extracts for real).
+        preprocess_input_dir = data
+        preprocess_output_dir = preprocess_meta_dir = data_dir = meta_dir = output_dir
+        mode = "inference" if kind == "asset_dir" else "wsi_only"
+
+        if kind == "asset_dir":
+            os.makedirs(output_dir, exist_ok=True)
+            patches_link = os.path.join(output_dir, "patches")
+            real_patches_dir = os.path.join(data, "patches")
+            if not os.path.islink(patches_link) or os.readlink(patches_link) != real_patches_dir:
+                if os.path.lexists(patches_link):
+                    os.remove(patches_link)
+                os.symlink(real_patches_dir, patches_link)
+
+        if kind == "wsi_file":
+            resolved_wsi_dir = wsi_dir or os.path.dirname(abs_data)
+        elif kind == "wsi_dir":
+            resolved_wsi_dir = wsi_dir or data
+        else:
+            resolved_wsi_dir = wsi_dir
+
+        config = self._data_config_template(safe_name)
+        config["DATA"].update({
+            "data_dir": data_dir,
+            "meta_dir": meta_dir,
+            "output_dir": output_dir,
+        })
+        if resolved_wsi_dir:
+            config["DATA"]["wsi_dir"] = resolved_wsi_dir
+        config["preprocess"].update({
+            "mode": mode,
+            "input_dir": preprocess_input_dir,
+            "output_dir": preprocess_output_dir,
+            "meta_dir": preprocess_meta_dir,
+        })
+        # Only bake an explicit overwrite in when the caller actually asked
+        # for one — leave the template's own default (and, downstream,
+        # this instance's preprocess_overrides) in charge otherwise, so an
+        # unset predict(overwrite=...) doesn't silently force overwrite=False
+        # over a user's preprocess_overrides={"overwrite": True} default.
+        if overwrite is not None:
+            config["preprocess"]["overwrite"] = overwrite
+        if coords_path is not None:
+            config["preprocess"]["coords_path"] = _abs_path(self.repo_root, coords_path)
+        self._write_yaml_template(config_path, config, overwrite=True)
+        return name
 
     def _legacy_pair(self, data_cfg: NamedConfig, model_cfg: NamedConfig) -> Tuple[str, str, str]:
         data_legacy = data_cfg.config.get("legacy", {})
@@ -1758,11 +2283,14 @@ class STPred:
         timestamps: Optional[Dict[str, str] | str] = None,
         ckpt_path: Optional[Dict[str, str] | str] = None,
         train_data: Optional[str] = None,
+        models: Optional[Sequence[str]] = None,
+        gene_list: Optional[Sequence[str]] = None,
+        batch_size: Optional[int] = None,
     ) -> Dict[str, Any]:
         data_cfg = self._resolve_data(data)
         train_data = train_data or data
         train_data_cfg = self._resolve_data(train_data)
-        model_cfgs = self._resolve_models()
+        model_cfgs = self._resolve_models(models)
         payloads = []
         fold_values = list(folds) if folds is not None else [None]
 
@@ -1791,6 +2319,8 @@ class STPred:
                     "log_file": self.log_file,
                     "use_wandb": self.use_wandb,
                     "wandb_project": self.wandb_project,
+                    "gene_list": list(gene_list) if gene_list is not None else None,
+                    "batch_size": batch_size,
                 }
                 training_pipeline = runtime_config.get("MODEL", {}).get("training_pipeline", {})
                 if isinstance(training_pipeline, str):
