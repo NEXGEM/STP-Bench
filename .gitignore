@@ -5,6 +5,8 @@ notebooks/
 
 /DeepSpotM
 
+/DeepSpotM
+
 # Model checkpoints / pretrained weights
 weights/
 **/weight/
