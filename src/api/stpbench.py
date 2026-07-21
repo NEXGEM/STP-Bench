@@ -1142,9 +1142,19 @@ class STPred:
                 # on a dataset whose own config sets preprocess.mode: inference),
                 # not for a complete external dataset like hest/LUAD that we
                 # also evaluate against known labels.
-                summary["preprocess_external"] = self.preprocess(external_data, **kwargs)
-                summary["predict_external"] = self.predict(external_data)
-                summary["evaluate_external"] = self.evaluate(mode="ext", external_data=external_data)
+                ext_kwargs = dict(kwargs)
+                ext_kwargs.setdefault("skip_model_preprocess", True)
+                summary["preprocess_external"] = self.preprocess(external_data, **ext_kwargs)
+                # preprocess_external above may have overwritten
+                # state["internal_data"] with `external_data` (its
+                # state-write heuristic treats any non-inference/wsi_only
+                # mode as "internal", which is wrong here) — pin train_data
+                # explicitly instead of letting predict()/evaluate() fall
+                # back to state.
+                summary["predict_external"] = self.predict(external_data, train_data=internal_data)
+                summary["evaluate_external"] = self.evaluate(
+                    mode="ext", data=internal_data, external_data=external_data
+                )
             return BenchmarkResult({"steps": summary})
 
     def preprocess(self, data: str, **overrides) -> Dict[str, Any]:
