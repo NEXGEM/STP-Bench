@@ -8,6 +8,7 @@ import subprocess
 import sys
 import csv
 import hashlib
+import multiprocessing
 import platform
 import time
 from collections import defaultdict
@@ -314,8 +315,39 @@ def _collect_run_artifacts(cfg, payload: Dict[str, Any], action: str, folds: Seq
 
 
 def _run_single_model_action(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Process-worker entrypoint for one model/data action."""
+    """Process-worker entrypoint for one model/data action.
 
+    Pins this worker to a physical GPU before any CUDA context exists.
+    When `payload["gpu_pool"]` is present (train/evaluate dispatched as
+    several fold/model payloads via _run_models' ProcessPoolExecutor
+    branch), the device is claimed dynamically from that shared pool —
+    whichever physical GPU is actually free right now — rather than a
+    device pre-assigned by round-robin at payload-construction time. Folds
+    finish at different times (e.g. early stopping triggers on different
+    epochs), so a static assignment can let two payloads collide on one
+    GPU while another sits idle once payload count exceeds GPU count.
+    `payload["gpu_id"]` keeps its separate existing meaning (predict's
+    sample-sharding index, and the device for actions with no gpu_pool)
+    untouched.
+    """
+    gpu_pool = payload.get("gpu_pool")
+    device = gpu_pool.get() if gpu_pool is not None else payload["gpu_id"]
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(device)
+    if gpu_pool is not None:
+        # Actions that use a shared pool (train/evaluate) don't rely on
+        # gpu_id for anything but device selection/logging, so it's safe
+        # to overwrite it with the device actually claimed — downstream
+        # logging/manifest/result reporting then reflect reality instead
+        # of the pre-acquisition round-robin guess.
+        payload["gpu_id"] = device
+    try:
+        return _run_single_model_action_impl(payload)
+    finally:
+        if gpu_pool is not None:
+            gpu_pool.put(device)
+
+
+def _run_single_model_action_impl(payload: Dict[str, Any]) -> Dict[str, Any]:
     from core import create_data_module, run_cross_validation, run_evaluation, run_inference, setup_env
 
     action = payload["action"]
@@ -351,7 +383,13 @@ def _run_single_model_action(payload: Dict[str, Any]) -> Dict[str, Any]:
     ):
         cfg = _build_runtime_cfg(payload)
         if action in {"train", "evaluate"}:
-            manifest_path = _write_manifest(cfg, payload, action, os.path.join(cfg.GENERAL.log_dir, "manifest.yaml"))
+            manifest_path = os.path.join(cfg.GENERAL.log_dir, "manifest.yaml")
+            # Every fold of one train()/evaluate() call shares this
+            # timestamp dir (see _build_runtime_cfg) — only the first fold
+            # writes the run-level manifest so parallel fold processes
+            # don't race on the same file.
+            if payload.get("fold") in (None, 0):
+                manifest_path = _write_manifest(cfg, payload, action, manifest_path)
         elif cfg.DATA.name.startswith("_wsi_predict/"):
             # WSI-predict output has no per-target directory (see
             # cfg.DATA.pred_path below), and output_dir is commonly reused
@@ -400,7 +438,7 @@ def _run_single_model_action(payload: Dict[str, Any]) -> Dict[str, Any]:
                     "skipped": True,
                     "skip_reason": "MODEL.skip_train=true",
                 }
-            folds = list(range(cfg.TRAINING.num_k))
+            folds = [payload.get("fold")] if payload.get("fold") is not None else list(range(cfg.TRAINING.num_k))
             for fold in folds:
                 with logger.section("fold", action=action, model=payload["model"], data=payload["data"], fold=fold):
                     cfg.DATA.fold = fold
@@ -650,7 +688,10 @@ def _build_runtime_cfg(payload: Dict[str, Any]):
     log_dir_parent = os.path.join(cfg.GENERAL.log_path, train_data, cfg.MODEL.name)
 
     if action == "train":
-        timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+        # Honor a timestamp threaded in by _run_models (shared across all
+        # fold payloads of one train() call) so parallel fold processes
+        # land in the same run directory instead of each minting their own.
+        timestamp = payload.get("timestamp") or datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
         cfg.GENERAL.timestamp = timestamp
         cfg.GENERAL.log_dir = os.path.join(log_dir_parent, timestamp)
         cfg.MODEL.data_dir = cfg.DATA.get("meta_dir", cfg.DATA.data_dir)
@@ -1238,10 +1279,14 @@ class STPred:
             return {"dry_run": False, "plan": plan}
 
     def train(self, data: Optional[str] = None, folds: Optional[Sequence[int]] = None) -> BenchmarkResult:
-        """Train all models on an internal dataset."""
+        """Train all models on an internal dataset.
 
-        if folds is not None:
-            raise NotImplementedError("train(folds=...) is not supported by the current runner.")
+        `folds` is optional — omit it to train every fold (`TRAINING.num_k`)
+        as before. Pass an explicit subset/full list (e.g. `range(num_k)`)
+        to have each fold dispatched as its own payload, which — combined
+        with `gpu > 1` — trains folds in parallel across GPUs instead of
+        sequentially in one process.
+        """
         data = data or self.state.get("internal_data")
         if data is None:
             raise ValueError("data must be provided for train() before internal state is set.")
@@ -2302,13 +2347,37 @@ class STPred:
         train_data_cfg = self._resolve_data(train_data)
         model_cfgs = self._resolve_models(models)
         payloads = []
-        fold_values = list(folds) if folds is not None else [None]
+        default_fold_values = list(folds) if folds is not None else [None]
 
-        for index, model_cfg in enumerate(model_cfgs):
+        for model_cfg in model_cfgs:
             runtime_config = self._merged_runtime_config(data_cfg, model_cfg)
             self._merged_runtime_config(train_data_cfg, model_cfg)
             config_key = f"{train_data_cfg.name}/{model_cfg.name}"
-            for fold in fold_values:
+
+            training_pipeline = runtime_config.get("MODEL", {}).get("training_pipeline", {})
+            if isinstance(training_pipeline, str):
+                training_pipeline = {"kind": training_pipeline}
+            is_sepal_two_stage = training_pipeline.get("kind") == "sepal_two_stage"
+
+            if action == "train" and not is_sepal_two_stage:
+                # Default to one payload per fold (not one payload that
+                # internally loops every fold) so folds can be dispatched to
+                # separate GPUs by the ProcessPoolExecutor below. All folds
+                # of this model share one timestamp, generated once here,
+                # so they land in the same run directory regardless of
+                # whether they end up running sequentially or in parallel.
+                # (sepal_two_stage is excluded: it's dispatched as a single
+                # "sepal_train" payload that manages its own fold loop —
+                # see _build_sepal_train_payload below.)
+                num_k = int(runtime_config.get("TRAINING", {}).get("num_k", 1))
+                model_fold_values = list(folds) if folds is not None else list(range(num_k))
+                model_timestamp = self._value_for_model(timestamps, model_cfg.name) or \
+                    datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+            else:
+                model_fold_values = default_fold_values
+                model_timestamp = None
+
+            for fold in model_fold_values:
                 payload = {
                     "repo_root": self.repo_root,
                     "runtime_config": runtime_config,
@@ -2321,9 +2390,12 @@ class STPred:
                     "model_config": model_cfg.path,
                     "action": action,
                     "fold": fold,
-                    "timestamp": self._value_for_model(timestamps, model_cfg.name),
+                    "timestamp": model_timestamp if action == "train" else self._value_for_model(timestamps, model_cfg.name),
                     "ckpt_path": self._value_for_model(ckpt_path, model_cfg.name),
-                    "gpu_id": self.gpu_id + (index % self.gpu),
+                    # Round-robin over the flat payload list (not the
+                    # model index) so each fold of the same model also gets
+                    # a distinct GPU instead of colliding on one.
+                    "gpu_id": self.gpu_id + (len(payloads) % self.gpu),
                     "debug": self.debug,
                     "verbose": self.verbose,
                     "log_file": self.log_file,
@@ -2332,10 +2404,7 @@ class STPred:
                     "gene_list": list(gene_list) if gene_list is not None else None,
                     "batch_size": batch_size,
                 }
-                training_pipeline = runtime_config.get("MODEL", {}).get("training_pipeline", {})
-                if isinstance(training_pipeline, str):
-                    training_pipeline = {"kind": training_pipeline}
-                if action == "train" and training_pipeline.get("kind") == "sepal_two_stage":
+                if action == "train" and is_sepal_two_stage:
                     payload.update(self._build_sepal_train_payload(data_cfg, model_cfg, runtime_config))
                 if (
                     action == "predict"
@@ -2395,30 +2464,52 @@ class STPred:
             else:
                 results = []
                 max_workers = min(self.gpu, len(payloads))
-                with ProcessPoolExecutor(max_workers=max_workers) as executor:
-                    future_to_payload = {
-                        executor.submit(_run_single_model_action, payload): payload
-                        for payload in payloads
-                    }
+                # Actions with no gpu_id-based sharding requirement (train,
+                # evaluate) claim a device dynamically from a shared pool
+                # instead of a static round-robin guess made before any
+                # payload has actually run — with payload count > gpu count
+                # and folds/models finishing at different times, a static
+                # guess can put two payloads on the same physical GPU while
+                # another sits idle. predict keeps its existing static
+                # payload["gpu_id"] (it doubles as a sample-sharding index
+                # there, which must stay a stable, pre-known value).
+                pool_actions = {"train", "evaluate"}
+                manager = multiprocessing.Manager() if any(p["action"] in pool_actions for p in payloads) else None
+                if manager is not None:
+                    gpu_pool = manager.Queue()
+                    for device in range(self.gpu_id, self.gpu_id + self.gpu):
+                        gpu_pool.put(device)
                     for payload in payloads:
-                        self.logger.info(
-                            "model_submit",
-                            action=action,
-                            model=payload["model"],
-                            data=payload["data"],
-                            gpu_id=payload["gpu_id"],
-                        )
-                    for future in as_completed(future_to_payload):
-                        payload = future_to_payload[future]
-                        result = future.result()
-                        self.logger.info(
-                            "model_complete",
-                            action=action,
-                            model=payload["model"],
-                            data=payload["data"],
-                            gpu_id=payload["gpu_id"],
-                        )
-                        results.append(result)
+                        if payload["action"] in pool_actions:
+                            payload["gpu_pool"] = gpu_pool
+                try:
+                    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                        future_to_payload = {
+                            executor.submit(_run_single_model_action, payload): payload
+                            for payload in payloads
+                        }
+                        for payload in payloads:
+                            self.logger.info(
+                                "model_submit",
+                                action=action,
+                                model=payload["model"],
+                                data=payload["data"],
+                                gpu_id=payload["gpu_id"],
+                            )
+                        for future in as_completed(future_to_payload):
+                            payload = future_to_payload[future]
+                            result = future.result()
+                            self.logger.info(
+                                "model_complete",
+                                action=action,
+                                model=payload["model"],
+                                data=payload["data"],
+                                gpu_id=result.get("gpu_id", payload["gpu_id"]),
+                            )
+                            results.append(result)
+                finally:
+                    if manager is not None:
+                        manager.shutdown()
 
         return BenchmarkResult({
             "dry_run": False,
@@ -2441,6 +2532,14 @@ class STPred:
                     "prediction_dirs": {},
                 },
             )
+            # When a model's folds ran as separate (possibly parallel)
+            # payloads, take the max elapsed_sec across them — that
+            # approximates parallel wall-clock time instead of reporting
+            # whichever fold's result happened to merge first.
+            if result.get("elapsed_sec") is not None:
+                model_summary["elapsed_sec"] = max(
+                    model_summary.get("elapsed_sec") or 0, result["elapsed_sec"]
+                )
             artifacts = result.get("artifacts", {})
             for fold, fold_artifact in artifacts.get("folds", {}).items():
                 if fold_artifact.get("metrics"):
