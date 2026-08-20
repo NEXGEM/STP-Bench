@@ -624,6 +624,71 @@ def _user_gene_overlap(
     }, missing
 
 
+def _deepspotm_gene_vocab(model_section: Dict[str, Any]) -> Optional[List[str]]:
+    """Read DeepSpotM's fixed gene vocabulary from its lightweight tokens.csv
+    sidecar file (not the full model weights). DeepSpotM.genes_to_indices()
+    hard-fails with KeyError on any gene outside this vocabulary, so a
+    dataset's HVG panel must be restricted to the overlap before evaluation."""
+    repo_id_or_path = model_section.get("repo_id_or_path")
+    if not repo_id_or_path:
+        return None
+    try:
+        if os.path.isdir(repo_id_or_path):
+            token_path = os.path.join(repo_id_or_path, "tokens.csv")
+        else:
+            from huggingface_hub import hf_hub_download
+            token_path = hf_hub_download(repo_id_or_path, "tokens.csv")
+        tokens = pd.read_csv(token_path)
+        return tokens.loc[tokens["token_type"] == "gene", "token"].tolist()
+    except Exception:
+        return None
+
+
+# Registry of models with their own fixed/limited gene vocabulary, readable
+# cheaply (without loading full model weights) to restrict train/eval to
+# genes the model actually supports. Applies whether the model is used
+# zero-shot (skip_train=true) or fine-tuned (skip_train=false) — a fixed
+# vocabulary is a property of the model architecture, not of whether this
+# run trains it. Models not listed here are assumed to have no such
+# restriction (current behavior, unchanged).
+_MODEL_GENE_VOCAB_RESOLVERS = {
+    "deepspotm.DeepSpotMModule": _deepspotm_gene_vocab,
+}
+
+
+def _model_gene_vocab(model_section: Dict[str, Any]) -> Optional[set]:
+    resolver = _MODEL_GENE_VOCAB_RESOLVERS.get(model_section.get("model_name"))
+    if resolver is None:
+        return None
+    vocab = resolver(model_section)
+    return set(vocab) if vocab is not None else None
+
+
+def _restrict_to_model_gene_vocab(cfg) -> None:
+    """Restrict cfg.DATA's gene panel to the overlap with the model's own
+    fixed vocabulary (if it has one — see _MODEL_GENE_VOCAB_RESOLVERS), for
+    both training and evaluation. Composes with any restriction already
+    applied (e.g. _external_gene_overlap): operates on whatever panel is
+    current, and gene_output_indices stays relative to the *original* full
+    training panel per _slice_gene_outputs' contract."""
+    vocab = _model_gene_vocab(cfg.MODEL)
+    if vocab is None:
+        return
+    if cfg.DATA.get("genes_override"):
+        base_genes = list(cfg.DATA.genes_override)
+        base_indices = list(cfg.DATA.gene_output_indices)
+    else:
+        import json as _json
+        with open(cfg.MODEL.gene_path) as f:
+            base_genes = _json.load(f)["genes"]
+        base_indices = list(range(len(base_genes)))
+    keep = [i for i, g in enumerate(base_genes) if g in vocab]
+    if len(keep) < len(base_genes):
+        cfg.DATA.genes_override = [base_genes[i] for i in keep]
+        cfg.DATA.num_outputs = len(keep)
+        cfg.DATA.gene_output_indices = [base_indices[i] for i in keep]
+
+
 def _classify_predict_target(data: str, repo_root: str = ".") -> str:
     """Classify predict()'s `data` argument.
 
@@ -695,6 +760,10 @@ def _build_runtime_cfg(payload: Dict[str, Any]):
         cfg.GENERAL.timestamp = timestamp
         cfg.GENERAL.log_dir = os.path.join(log_dir_parent, timestamp)
         cfg.MODEL.data_dir = cfg.DATA.get("meta_dir", cfg.DATA.data_dir)
+        train_meta_dir = cfg.DATA.get("meta_dir", cfg.DATA.data_dir)
+        gene_path = f"{train_meta_dir}/{cfg.DATA.gene_type}_{cfg.DATA.num_genes}genes.json"
+        cfg.MODEL.gene_path = gene_path if os.path.isfile(gene_path) else f"{cfg.DATA.data_dir}/{cfg.DATA.gene_type}_{cfg.DATA.num_genes}genes.json"
+        _restrict_to_model_gene_vocab(cfg)
         if not payload["debug"]:
             os.makedirs(cfg.GENERAL.log_dir, exist_ok=True)
             with open(os.path.join(cfg.GENERAL.log_dir, "config.yaml"), "w") as f:
@@ -760,6 +829,7 @@ def _build_runtime_cfg(payload: Dict[str, Any]):
                 cfg.DATA.genes_override = overlap["genes"]
                 cfg.DATA.num_outputs = len(overlap["genes"])
                 cfg.DATA.gene_output_indices = overlap["indices"]
+        _restrict_to_model_gene_vocab(cfg)
         if payload["data"] == train_data:
             cfg.DATA.pred_path = f"{cfg.DATA.output_dir}/{cfg.DATA.name}/{cfg.MODEL.name}"
         else:
