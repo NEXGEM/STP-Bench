@@ -23,7 +23,7 @@ import pandas as pd
 from api.benchmark_logger import BenchmarkLogger
 from api.config_resolver import NamedConfig, data_config_exists, resolve_data_config, resolve_model_config
 from api.output_control import suppress_library_output
-from api.result import BenchmarkResult
+from api.result import BenchmarkResult, DownstreamResult
 
 
 class _repomethod:
@@ -899,6 +899,131 @@ def _resolve_predict_checkpoint(ckpt_path: str, fold: Optional[int]) -> Tuple[st
     raise ValueError(f"No checkpoint found under {ckpt_path}.")
 
 
+def _pred_path_for(output_dir: str, data_name: str, model_name: str, train_data_name: str, fold: int) -> str:
+    """Prediction directory for one (data, model, train_data, fold) tuple,
+    matching the exact formula `_build_runtime_cfg`'s `action == "evaluate"`
+    branch already computes (see `cfg.DATA.pred_path` there): no `/
+    {train_data}/` segment for internal eval (data == train_data), one for
+    external eval. `downstream()` uses this to locate prediction files
+    directly, without building a full Lightning runtime config — downstream
+    analyses don't train/checkpoint anything, so they don't need one.
+    """
+    if data_name == train_data_name:
+        pred_path = f"{output_dir}/{data_name}/{model_name}"
+    else:
+        pred_path = f"{output_dir}/{data_name}/{model_name}/{train_data_name}"
+    return f"{pred_path}/fold{fold}"
+
+
+def _dispatch_payloads(payloads: List[Dict[str, Any]], worker_fn, gpu: int, logger: BenchmarkLogger, action_label: str) -> List[Dict[str, Any]]:
+    """Same GPU round-robin + parallel-or-sequential dispatch shape as
+    `STPred._run_models` (sequential when gpu==1 or a single payload,
+    otherwise a `ProcessPoolExecutor` capped at `gpu` workers). Written as
+    a standalone function for `downstream()` rather than factored out of
+    `_run_models` itself, so the existing, already-covered train/evaluate/
+    predict dispatch path is not touched by this change.
+    """
+    if not payloads:
+        return []
+
+    if gpu == 1 or len(payloads) <= 1:
+        results = []
+        for payload in payloads:
+            logger.info(
+                "model_submit", action=action_label, model=payload.get("model"),
+                data=payload.get("data"), gpu_id=payload.get("gpu_id"),
+            )
+            results.append(worker_fn(payload))
+        return results
+
+    results = []
+    max_workers = min(gpu, len(payloads))
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        future_to_payload = {executor.submit(worker_fn, payload): payload for payload in payloads}
+        for payload in payloads:
+            logger.info(
+                "model_submit", action=action_label, model=payload.get("model"),
+                data=payload.get("data"), gpu_id=payload.get("gpu_id"),
+            )
+        for future in as_completed(future_to_payload):
+            payload = future_to_payload[future]
+            result = future.result()
+            logger.info(
+                "model_complete", action=action_label, model=payload.get("model"),
+                data=payload.get("data"), gpu_id=payload.get("gpu_id"),
+            )
+            results.append(result)
+    return results
+
+
+def _downstream_entrypoints(mode: str):
+    """Lazily import a mode's run_<mode>/evaluate_<mode> pair, so requesting
+    one downstream mode never requires the other modes' heavy third-party
+    dependencies (gseapy vs cell2location/pyro-ppl vs SpaGCN) to be
+    installed."""
+    if mode == "gene_enrichment":
+        from downstream.gene_enrichment import evaluate_gene_enrichment, run_gene_enrichment
+        return run_gene_enrichment, evaluate_gene_enrichment
+    if mode == "deconvolution":
+        from downstream.deconvolution import evaluate_deconvolution, run_deconvolution
+        return run_deconvolution, evaluate_deconvolution
+    if mode == "spatial_domain":
+        from downstream.spatial_domain import evaluate_spatial_domain, run_spatial_domain
+        return run_spatial_domain, evaluate_spatial_domain
+    raise ValueError(f"Unknown downstream mode: {mode!r}; expected 'gene_enrichment', 'deconvolution', or 'spatial_domain'.")
+
+
+def _run_single_downstream_action(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Process-worker entrypoint for one (model, fold) downstream action.
+
+    Unlike `_run_single_model_action`, this never builds a Lightning runtime
+    config, resolves a checkpoint, or touches timestamps/log_dir — downstream
+    analyses only read already-materialized prediction/ground-truth `.h5ad`
+    files, so `cfg` here is a minimal addict.Dict carrying just what
+    `run_<mode>`/`evaluate_<mode>` (src/downstream/<mode>/{run,evaluate}.py)
+    actually need.
+    """
+    from addict import Dict as _ADict
+
+    logger = _payload_logger(payload)
+    mode = payload["mode"]
+    run_fn, evaluate_fn = _downstream_entrypoints(mode)
+
+    cfg = _ADict()
+    cfg.DATA.data_dir = payload["data_dir"]
+    cfg.DATA.pred_path_fold = payload["pred_path_fold"]
+    cfg.DATA.cpm = payload["cpm"]
+    cfg.DATA.downstream = payload["downstream_params"]
+    cfg.MODEL.gene_path = payload["gene_path"]
+    cfg.GENERAL.gpu_id = payload["gpu_id"]
+    # Only deconvolution needs these: its reference signatures are cached
+    # per (data, train_data) — not per model/fold — under
+    # {output_dir}/{data}/_downstream_cache/deconvolution/{train_data}/,
+    # a path that can't be derived from pred_path_fold alone (its model-name
+    # segment's position isn't fixed — see _pred_path_for).
+    cfg.DATA.output_dir = payload["output_dir"]
+    cfg.DATA.name = payload["data"]
+    cfg.DATA.train_data_name = payload["train_data"]
+
+    with suppress_library_output(), logger.section(
+        "downstream_action", mode=mode, model=payload["model"], data=payload["data"],
+        fold=payload["fold"], gpu_id=payload["gpu_id"],
+    ):
+        run_result = run_fn(cfg)
+        evaluate_result = evaluate_fn(cfg) if payload.get("evaluate_against_gt", True) else None
+
+    return {
+        "model": payload["model"],
+        "data": payload["data"],
+        "train_data": payload["train_data"],
+        "mode": mode,
+        "fold": payload["fold"],
+        "gpu_id": payload["gpu_id"],
+        "run": run_result,
+        "evaluate": evaluate_result,
+    }
+
+
 class STPred:
     """User-facing API for the STPBench multi-model benchmark."""
 
@@ -1421,6 +1546,160 @@ class STPred:
         if output_dir:
             self.state["last_output_dir"] = output_dir
         return results
+
+    def downstream(
+        self,
+        mode: str,
+        data: Optional[str] = None,
+        train_data: Optional[str] = None,
+        prior_result: Optional[BenchmarkResult] = None,
+        evaluate_against_gt: bool = True,
+        folds: Optional[Sequence[int]] = None,
+        models: Optional[Sequence[str]] = None,
+        overrides: Optional[Dict[str, Any]] = None,
+    ) -> DownstreamResult:
+        """Run a downstream analysis (gene enrichment, cell-type
+        deconvolution, or spatial domain identification) on top of already-
+        predicted ST expression.
+
+        `mode` selects the analysis: `"gene_enrichment"` (ssGSEA-style
+        pathway activity scoring), `"deconvolution"` (cell2location cell-type
+        abundance), or `"spatial_domain"` (SpaGCN clustering).
+
+        Prediction files are located automatically. Pass the `BenchmarkResult`
+        returned by a prior `evaluate()`/`evaluate_internal()`/
+        `evaluate_external()`/`predict()` call as `prior_result` to reuse its
+        exact prediction directories (via `prior_result.prediction_dirs()`);
+        otherwise the same `{output_dir}/{data}/{model}/[{train_data}/]
+        fold{k}` convention `evaluate()` itself uses is recomputed directly
+        from `data`/`train_data`/`folds`.
+
+        When `evaluate_against_gt=True` (default), each mode also runs the
+        same analysis on the corresponding ground-truth ST (read from
+        `{data_dir}/st/{sample_id}.h5ad`, the same source `STDataset` reads
+        training/eval labels from) and reports the comparison (Pearson/
+        Spearman for gene_enrichment, per-cell-type Pearson for
+        deconvolution, ARI/NMI/AMI for spatial_domain) — set to `False` to
+        only compute the analysis on predictions, with no ground truth
+        needed (e.g. genuinely unlabeled inference output).
+
+        `overrides` sets/overrides mode-specific parameters (e.g.
+        `{"library": "GO_Biological_Process_2023"}` for gene_enrichment) for
+        this call only, on top of `config/downstream/defaults.yaml` and any
+        `DATA.downstream.<mode>` block in the data config.
+        """
+        if mode not in {"gene_enrichment", "deconvolution", "spatial_domain"}:
+            raise ValueError(
+                f"mode must be 'gene_enrichment', 'deconvolution', or 'spatial_domain', got {mode!r}."
+            )
+
+        train_data = train_data or self.state.get("internal_data")
+        if data is None and prior_result is not None:
+            data = prior_result.get("plan", {}).get("data")
+        data = data or train_data
+        if data is None:
+            raise ValueError(
+                "downstream() needs data (directly, via prior_result, or from a prior "
+                "train()/evaluate()/predict() call)."
+            )
+        train_data = train_data or data
+
+        data_cfg = self._resolve_data(data)
+        train_data_cfg = self._resolve_data(train_data)
+        model_cfgs = self._resolve_models(models)
+
+        data_section = data_cfg.config.get("DATA", {})
+        train_data_section = train_data_cfg.config.get("DATA", {})
+        output_dir = _abs_path(self.repo_root, data_section.get("output_dir", "output/pred"))
+        data_dir = _abs_path(self.repo_root, data_section.get("data_dir"))
+        cpm = bool(data_section.get("cpm", False))
+
+        train_meta_dir = _abs_path(
+            self.repo_root, train_data_section.get("meta_dir", train_data_section.get("data_dir"))
+        )
+        train_data_dir = _abs_path(self.repo_root, train_data_section.get("data_dir"))
+        gene_type = train_data_section.get("gene_type")
+        num_genes = train_data_section.get("num_genes")
+        gene_path = f"{train_meta_dir}/{gene_type}_{num_genes}genes.json"
+        if not os.path.isfile(gene_path):
+            gene_path = f"{train_data_dir}/{gene_type}_{num_genes}genes.json"
+
+        fold_values = list(folds) if folds is not None else list(range(train_data_cfg.config.get("TRAINING", {}).get("num_k", 1)))
+        downstream_params = self._merge_downstream_defaults(mode, data_cfg, overrides)
+        prior_pred_dirs = prior_result.prediction_dirs() if prior_result is not None else {}
+
+        payloads = []
+        for index, model_cfg in enumerate(model_cfgs):
+            model_prior_dirs = prior_pred_dirs.get(model_cfg.name)
+            for fold in fold_values:
+                if isinstance(model_prior_dirs, dict) and fold in model_prior_dirs:
+                    pred_path_fold = model_prior_dirs[fold]
+                elif isinstance(model_prior_dirs, str):
+                    pred_path_fold = model_prior_dirs
+                else:
+                    pred_path_fold = _pred_path_for(output_dir, data_cfg.name, model_cfg.name, train_data_cfg.name, fold)
+
+                payloads.append({
+                    "mode": mode,
+                    "model": model_cfg.name,
+                    "data": data_cfg.name,
+                    "train_data": train_data_cfg.name,
+                    "fold": fold,
+                    "gpu_id": self.gpu_id + (index % self.gpu),
+                    "data_dir": data_dir,
+                    "output_dir": output_dir,
+                    "pred_path_fold": pred_path_fold,
+                    "cpm": cpm,
+                    "gene_path": gene_path,
+                    "downstream_params": downstream_params,
+                    "evaluate_against_gt": evaluate_against_gt,
+                    "verbose": self.verbose,
+                    "log_file": self.log_file,
+                })
+
+        plan = {
+            "mode": mode, "data": data_cfg.name, "train_data": train_data_cfg.name,
+            "payloads": len(payloads), "evaluate_against_gt": evaluate_against_gt,
+        }
+        if self.dry_run:
+            self.logger.info("downstream", status="dry_run", mode=mode, data=data_cfg.name, payloads=len(payloads))
+            return DownstreamResult({"dry_run": True, "plan": plan})
+
+        with self.logger.section(
+            "downstream", mode=mode, data=data_cfg.name, train_data=train_data_cfg.name, payloads=len(payloads),
+        ):
+            results = _dispatch_payloads(
+                payloads, _run_single_downstream_action, gpu=self.gpu, logger=self.logger,
+                action_label=f"downstream:{mode}",
+            )
+
+        return DownstreamResult({"dry_run": False, "plan": plan, "results": results})
+
+    def _merge_downstream_defaults(
+        self, mode: str, data_cfg: NamedConfig, overrides: Optional[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Merge config/downstream/defaults.yaml[mode] (algorithm defaults,
+        dataset-agnostic) with this data config's DATA.downstream.<mode>
+        block (dataset-specific overrides, e.g. a reference atlas path) and
+        any per-call `overrides` — same three-tier precedence pattern as
+        MODEL.* defaults + DATA.* overrides elsewhere in this file."""
+        defaults_path = os.path.join(self.repo_root, "config", "downstream", "defaults.yaml")
+        defaults = _load_yaml_file(defaults_path).get(mode, {}) if os.path.isfile(defaults_path) else {}
+        data_overrides = (data_cfg.config.get("DATA", {}).get("downstream", {}) or {}).get(mode, {})
+        merged = _merge_dicts(defaults, data_overrides)
+        if overrides:
+            merged = _merge_dicts(merged, overrides)
+
+        required_fields = {"deconvolution": ["reference_path"]}
+        missing = [key for key in required_fields.get(mode, []) if merged.get(key) is None]
+        if missing:
+            raise ValueError(
+                f"downstream(mode={mode!r}) is missing required field(s) {missing}. "
+                f"Set DATA.downstream.{mode}.<field> in {data_cfg.path}."
+            )
+        if merged.get("reference_path"):
+            merged["reference_path"] = _abs_path(self.repo_root, merged["reference_path"])
+        return merged
 
     def visualize(
         self,
