@@ -1102,6 +1102,8 @@ def _run_single_downstream_action(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     cfg = _ADict()
     cfg.DATA.data_dir = payload["data_dir"]
+    cfg.DATA.meta_dir = payload["meta_dir"]
+    cfg.DATA.fold = payload["fold"]
     cfg.DATA.pred_path_fold = payload["pred_path_fold"]
     cfg.DATA.cpm = payload["cpm"]
     cfg.DATA.downstream = payload["downstream_params"]
@@ -1728,6 +1730,12 @@ class STPred:
         output_dir = _abs_path(self.repo_root, data_section.get("output_dir", "output/pred"))
         data_dir = _abs_path(self.repo_root, data_section.get("data_dir"))
         cpm = bool(data_section.get("cpm", False))
+        # `data`'s own meta_dir/ids.csv (not train_data's) -- list_fold_samples()
+        # uses this to restrict a fold's downstream analysis to samples actually
+        # assigned "test" for that fold, rather than every *.h5ad file sitting in
+        # the prediction directory (which can otherwise still contain stale
+        # predictions left by unrelated runs against the same path).
+        meta_dir = _abs_path(self.repo_root, data_section.get("meta_dir", data_section.get("data_dir")))
 
         train_meta_dir = _abs_path(
             self.repo_root, train_data_section.get("meta_dir", train_data_section.get("data_dir"))
@@ -1762,6 +1770,7 @@ class STPred:
                     "fold": fold,
                     "gpu_id": self.gpu_id + (index % self.gpu),
                     "data_dir": data_dir,
+                    "meta_dir": meta_dir,
                     "output_dir": output_dir,
                     "pred_path_fold": pred_path_fold,
                     "cpm": cpm,

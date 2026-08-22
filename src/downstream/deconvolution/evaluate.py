@@ -45,7 +45,7 @@ def evaluate_deconvolution(cfg) -> Dict[str, Any]:
         return abundance
 
     rows: List[Dict[str, Any]] = []
-    for sample_id in list_fold_samples(cfg.DATA.pred_path_fold):
+    for sample_id in list_fold_samples(cfg):
         pred_csv = os.path.join(out_dir, f"{sample_id}.q05_cell_abundance_w_sf.csv")
         if os.path.isfile(pred_csv):
             pred_abundance = pd.read_csv(pred_csv, index_col=0)

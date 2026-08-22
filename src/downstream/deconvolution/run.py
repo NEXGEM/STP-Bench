@@ -60,7 +60,7 @@ def run_deconvolution(cfg) -> Dict[str, Any]:
     os.makedirs(out_dir, exist_ok=True)
 
     manifest: Dict[str, str] = {}
-    for sample_id in list_fold_samples(cfg.DATA.pred_path_fold):
+    for sample_id in list_fold_samples(cfg):
         adata = load_pred_adata(cfg.DATA.pred_path_fold, sample_id)
         adata = to_count_scale(adata, source="pred", cpm=cpm)
         result_adata, abundance = run_cell2location_sample(

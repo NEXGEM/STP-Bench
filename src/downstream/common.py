@@ -52,11 +52,50 @@ def load_pred_adata(pred_path_fold: str, sample_id: str):
     return sc.read_h5ad(path)
 
 
-def list_fold_samples(pred_path_fold: str) -> List[str]:
-    """Sample IDs with a prediction under this fold dir, matching run_inference's
-    own `{pred_path_fold}/{sample_id}.h5ad` naming convention."""
-    paths = sorted(glob(os.path.join(pred_path_fold, "*.h5ad")))
-    return [os.path.splitext(os.path.basename(path))[0] for path in paths]
+def list_fold_samples(cfg) -> List[str]:
+    """Sample IDs to run this fold's downstream analysis on.
+
+    Restricts to samples actually assigned "test" for this fold in `data`'s
+    own `ids.csv` (`fold_<fold>` column), intersected with what has a
+    prediction file under `{pred_path_fold}/{sample_id}.h5ad`. A plain glob
+    of the prediction directory is NOT enough on its own: that directory can
+    accumulate stale `.h5ad` files from unrelated runs (a different fold, an
+    old experiment, a WSI-only predict() call) that were never part of this
+    fold's real test set, and would otherwise get silently ingested here too.
+
+    Falls back to the plain glob (with a warning) when `cfg.DATA.meta_dir`/
+    `cfg.DATA.fold` aren't set, or when `ids.csv` has no `fold_<fold>` column
+    at all -- e.g. an external dataset with no CV split, where every sample
+    is legitimately available under every fold's checkpoint.
+    """
+    pred_path_fold = cfg.DATA.pred_path_fold
+    available = {
+        os.path.splitext(os.path.basename(path))[0]
+        for path in glob(os.path.join(pred_path_fold, "*.h5ad"))
+    }
+
+    meta_dir = cfg.DATA.get("meta_dir")
+    fold = cfg.DATA.get("fold")
+    if meta_dir is None or fold is None:
+        warnings.warn(
+            "list_fold_samples() called without cfg.DATA.meta_dir/fold -- falling "
+            "back to globbing every *.h5ad in the prediction directory, which "
+            "cannot distinguish this fold's real test set from stale files left "
+            "by unrelated runs.",
+            stacklevel=2,
+        )
+        return sorted(available)
+
+    import pandas as pd
+
+    ids_path = os.path.join(meta_dir, "ids.csv")
+    ids = pd.read_csv(ids_path)
+    fold_col = f"fold_{fold}"
+    if fold_col not in ids.columns:
+        return sorted(set(ids["sample_id"].astype(str)) & available)
+
+    test_ids = set(ids.loc[ids[fold_col] == "test", "sample_id"].astype(str))
+    return sorted(test_ids & available)
 
 
 def load_gene_panel(gene_path: str) -> List[str]:

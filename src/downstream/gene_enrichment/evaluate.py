@@ -90,7 +90,7 @@ def evaluate_gene_enrichment(cfg) -> Dict[str, Any]:
     method = params.get("score_method", "rank_mean")
 
     all_rows: List[Dict[str, Any]] = []
-    for sample_id in list_fold_samples(cfg.DATA.pred_path_fold):
+    for sample_id in list_fold_samples(cfg):
         try:
             pred_adata = load_pred_adata(cfg.DATA.pred_path_fold, sample_id)
             gt_adata = load_gt_adata(cfg.DATA.data_dir, sample_id)

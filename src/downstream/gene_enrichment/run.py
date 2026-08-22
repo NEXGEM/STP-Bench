@@ -50,7 +50,7 @@ def run_gene_enrichment(cfg) -> Dict[str, Any]:
 
     method = params.get("score_method", "rank_mean")
     manifest: Dict[str, str] = {}
-    for sample_id in list_fold_samples(cfg.DATA.pred_path_fold):
+    for sample_id in list_fold_samples(cfg):
         pred_adata = load_pred_adata(cfg.DATA.pred_path_fold, sample_id)
         pred_adata = subset_to_genes(pred_adata, genes)
         pred_adata = to_log_scale(pred_adata, source="pred", cpm=cfg.DATA.get("cpm", False))

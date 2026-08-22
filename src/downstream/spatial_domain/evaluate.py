@@ -36,7 +36,7 @@ def evaluate_spatial_domain(cfg) -> Dict[str, Any]:
     os.makedirs(gt_cache_dir, exist_ok=True)
 
     rows: List[Dict[str, Any]] = []
-    for sample_id in list_fold_samples(cfg.DATA.pred_path_fold):
+    for sample_id in list_fold_samples(cfg):
         pred_path = os.path.join(out_dir, f"{sample_id}.h5ad")
         if os.path.isfile(pred_path):
             pred_clustered = sc.read_h5ad(pred_path)
