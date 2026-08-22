@@ -9,3 +9,10 @@ cell2location==0.1.5
 # Verified working (real end-to-end SpaGCN clustering run) with the same env
 # above.
 SpaGCN==1.2.7
+# SpaGCN depends on louvain (unpinned) for its init="louvain" clustering step.
+# louvain==0.7.1 (the version pip/uv resolves without this pin) segfaults
+# against runtime.txt's python-igraph>=0.11.0 — its compiled C extension
+# predates igraph's 0.11/1.0 ABI. louvain>=0.8.2 is built against the newer
+# igraph and runs cleanly; verified with a real SpaGCN run reproducing
+# reference cluster labels exactly (ARI=1.0).
+louvain>=0.8.2
