@@ -1,0 +1,39 @@
+MODEL:
+  model_name: deepspotm.DeepSpotMModule
+  fine_tune: true
+  skip_train: false
+  adapter: contrastive
+  # DeepSpotM is a gated HuggingFace repo (huggingface.co/ratschlab/DeepSpotM).
+  # Request access, then `huggingface-cli login`, before running with this
+  # config as-is, or download the repo locally and point repo_id_or_path at
+  # that directory (see src/model/deepspotm/README.md).
+  #
+  # This is the fine-tuning variant of DeepSpotM.yaml: skip_train=false lets
+  # STPred.train() actually run. The pretrained checkpoint loads with its own
+  # LoRA config (use_lora=true by default, baked into the HF repo's
+  # config.json) — training only updates the LoRA adapters injected into the
+  # vision backbone's attention projections plus the gene decoder; the
+  # backbone's own pretrained weights stay frozen.
+  repo_id_or_path: ratschlab/DeepSpotM
+  source: scgpt
+  device: cpu
+DATA:
+  dataset_name: DeepSpotMDataset
+  feature_type: none
+  use_emb: false
+  # The dataset's own train_dataloader.batch_size (commonly 128, tuned for
+  # cheap embedding-based models) OOMs the giant Midnight ViT backbone during
+  # real backprop -- chunking inside DeepSpotMModule.forward() only helps at
+  # inference (no_grad); during training every chunk's activations stay live
+  # for the backward pass, so it doesn't reduce peak memory. Override to a
+  # size the backbone can actually fit.
+  train_dataloader:
+    batch_size: 8
+TRAINING:
+  # LoRA fine-tuning of an already-pretrained foundation model needs far
+  # fewer epochs than training a model from scratch -- the dataset configs'
+  # own num_epochs=200/patience=20 are sized for from-scratch training and
+  # would take many hours per fold here.
+  num_epochs: 10
+  early_stopping:
+    patience: 3
