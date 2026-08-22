@@ -16,3 +16,8 @@ SpaGCN==1.2.7
 # igraph and runs cleanly; verified with a real SpaGCN run reproducing
 # reference cluster labels exactly (ARI=1.0).
 louvain>=0.8.2
+# louvain's __init__.py does `from pkg_resources import ...` unconditionally.
+# setuptools>=81 removed pkg_resources entirely (it's slated for full removal
+# upstream), which breaks the import before louvain's clustering code ever
+# runs -- pin below that until louvain itself drops the pkg_resources import.
+setuptools<81
