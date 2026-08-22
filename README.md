@@ -1,7 +1,8 @@
 # STP-Bench: A Unified Systematic Benchmark for Virtual Spatial Transcriptomics from Histopathology Images
 
-[![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/)
 [![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/release/python-3110/)
+[![🤗 Dataset](https://img.shields.io/badge/%F0%9F%A4%97%20Dataset-nexgem%2FSTP--Bench-yellow.svg)](https://huggingface.co/datasets/nexgem/STP-Bench)
+[![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/)
 
 STP-Bench is a benchmark suite for **virtual spatial transcriptomics** — predicting
 spot-level gene expression directly from H&E histopathology images. It provides a
@@ -10,8 +11,21 @@ collection of published models under matched **internal cross-validation** and
 **external-dataset** evaluation protocols, so results stay directly comparable
 across models and datasets.
 
+<img src="figures/STP-Bench.jpg" />
+
+Most models plug into a shared, swappable **patch encoder** (`DATA.model_name`,
+default `uni_v2`) and only differ in the **downstream architecture** built on
+top of its embeddings — the benchmark deliberately keeps that encoder fixed
+across those models so performance difference reflects architecture,
+not "which foundation model happened to extract its features." A smaller set
+of models bring their own internal image encoder instead (a custom CNN/ViT
+backbone baked into the model class, or a zero-shot pretrained model) and sit
+outside that comparison axis — see
+[Configuration](#configuration) below for which is which.
+
 ## Updates
 
+- **2026-08-22** — Added **AsymST**, an asymmetric dual-pathway (DenseNet-121 + UNI2-h ViT cross-attention fusion) model with its own internal image encoder (`feature_type: none`) rather than the shared patch-encoder pipeline.
 - **2026-07-17** — Added **DeepSpotM** as a new zero-shot pretrained model.
 - **2026-05-28** — Initial release.
 
@@ -245,7 +259,7 @@ DATA:
   gene_type: hmhvg
   num_genes: 200
   num_outputs: 200
-  model_name: uni_v2          # patch encoder
+  model_name: uni_v2          # patch encoder — see note below
   train_dataloader: {batch_size: 128, num_workers: 4, pin_memory: false, shuffle: true}
   test_dataloader:  {batch_size: 1,   num_workers: 4, pin_memory: false, shuffle: false}
 
@@ -254,6 +268,24 @@ preprocess:
   input_dir: /path/to/raw_data
   output_dir: /path/to/processed_data
 ```
+
+`DATA.model_name` selects the **patch encoder** used to pre-extract patch
+embeddings — a choice that's independent of, and swappable separately from,
+each model's own downstream architecture (`config/model/<Model>.yaml`).
+Leave it at the default, `uni_v2`, unless you have a specific reason to
+change it: every model that consumes pre-extracted embeddings
+(`feature_type: global/neighbor/target/all`) is benchmarked against the
+*same* encoder, which is what makes their scores comparable as an
+architecture comparison in the first place — changing it for only some
+models would conflate "better architecture" with "better patch encoder."
+A minority of models bypass this shared encoder entirely, either because
+they build their own image encoder into the model class (`feature_type:
+none`, e.g. a custom CNN/ViT backbone) or because they're zero-shot
+foundation models with a fixed pretrained backbone (e.g. DeepSpotM). Those
+aren't on the same comparison axis and shouldn't be read as "architecture X
+beats architecture Y" against `uni_v2`-encoder models — see
+[docs/guide.md — Adding a New Model](docs/guide.md#adding-a-new-model) for
+how a new model's config should flag which category it falls into.
 
 Use `STPred.init_data_config("my_data")` to generate an editable template.
 All relative paths in configs (`meta_dir`, `log_path`, `output_dir`) are
@@ -313,3 +345,15 @@ that encode the procedures above as agent-actionable checklists — see
 ## License
 
 Released under [CC BY-NC-SA 4.0](LICENSE.md) — non-commercial use with attribution, and derivatives must be shared under the same license.
+
+## Citation
+
+<!-- TODO: add citation once the paper is on arXiv -->
+```
+@article{stpbench2026,
+  title={STP-BENCH: A Unified Systematic Benchmark for Virtual Spatial Transcriptomics from Histopathology Images},
+  author={...},
+  journal={...},
+  year={2026}
+}
+```
