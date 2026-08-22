@@ -25,7 +25,7 @@ outside that comparison axis — see
 
 ## Updates
 
-- **2026-08-22** — Added **AsymST**, an asymmetric dual-pathway (DenseNet-121 + UNI2-h ViT cross-attention fusion) model with its own internal image encoder (`feature_type: none`) rather than the shared patch-encoder pipeline.
+- **2026-08-22** — Added **AsymST** as a new DenseNet-121 + UNI2-h fusion model.
 - **2026-07-17** — Added **DeepSpotM** as a new zero-shot pretrained model.
 - **2026-05-28** — Initial release.
 
