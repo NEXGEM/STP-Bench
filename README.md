@@ -404,10 +404,16 @@ DATA:
 Any labeled scRNA-seq atlas for the tissue of interest works, as long as it
 matches the format above. Public atlases we've validated this against:
 
-| Tissue | Atlas | Reference |
-|---|---|---|
-| Lung | LuCA (Lung Cancer Atlas) — core atlas | Salcher S, Sturm G, Horvath L, et al. "High-resolution single-cell atlas reveals diversity and plasticity of tissue-resident neutrophils in non-small cell lung cancer." *Cancer Cell*, 2022. |
-| Breast | HBCA (Human Breast Cell Atlas) — global | Kumar T, Nee K, Wei R, et al. "A spatially resolved single-cell genomic atlas of the adult human breast." *Nature*, 2023. |
+| Tissue | Atlas | Reference | Source |
+|---|---|---|---|
+| Lung | LuCA (Lung Cancer Atlas) — core atlas | Salcher S, Sturm G, Horvath L, et al. "High-resolution single-cell atlas reveals diversity and plasticity of tissue-resident neutrophils in non-small cell lung cancer." *Cancer Cell*, 2022. | [cellxgene collection](https://cellxgene.cziscience.com/collections/edb893ee-4066-4128-9aec-5eb2b03f8287) — "core atlas" dataset, ~890k cells |
+| Breast | HBCA (Human Breast Cell Atlas) — global | Kumar T, Nee K, Wei R, et al. "A spatially resolved single-cell genomic atlas of the adult human breast." *Nature*, 2023. | not yet linked here — see the paper |
+
+cellxgene exports commonly store raw counts in `.raw.X` rather than a named
+`.layers['count']`, and use their own `.obs`/`.var` column names — you'll
+likely need to re-save a copy with `.X`/`.layers['count']` set to `.raw.X`
+and `labels_key`/`batch_key` pointed at whatever columns the atlas actually
+has (e.g. `cell_type`/`donor_id`) before `reference_path` will work as-is.
 
 `spatial_domain` needs no external reference — it clusters directly on
 predicted/ground-truth expression and spatial coordinates.
