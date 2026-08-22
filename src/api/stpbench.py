@@ -8,6 +8,7 @@ import subprocess
 import sys
 import csv
 import hashlib
+import multiprocessing
 import platform
 import time
 from collections import defaultdict
@@ -314,8 +315,39 @@ def _collect_run_artifacts(cfg, payload: Dict[str, Any], action: str, folds: Seq
 
 
 def _run_single_model_action(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Process-worker entrypoint for one model/data action."""
+    """Process-worker entrypoint for one model/data action.
 
+    Pins this worker to a physical GPU before any CUDA context exists.
+    When `payload["gpu_pool"]` is present (train/evaluate dispatched as
+    several fold/model payloads via _run_models' ProcessPoolExecutor
+    branch), the device is claimed dynamically from that shared pool —
+    whichever physical GPU is actually free right now — rather than a
+    device pre-assigned by round-robin at payload-construction time. Folds
+    finish at different times (e.g. early stopping triggers on different
+    epochs), so a static assignment can let two payloads collide on one
+    GPU while another sits idle once payload count exceeds GPU count.
+    `payload["gpu_id"]` keeps its separate existing meaning (predict's
+    sample-sharding index, and the device for actions with no gpu_pool)
+    untouched.
+    """
+    gpu_pool = payload.get("gpu_pool")
+    device = gpu_pool.get() if gpu_pool is not None else payload["gpu_id"]
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(device)
+    if gpu_pool is not None:
+        # Actions that use a shared pool (train/evaluate) don't rely on
+        # gpu_id for anything but device selection/logging, so it's safe
+        # to overwrite it with the device actually claimed — downstream
+        # logging/manifest/result reporting then reflect reality instead
+        # of the pre-acquisition round-robin guess.
+        payload["gpu_id"] = device
+    try:
+        return _run_single_model_action_impl(payload)
+    finally:
+        if gpu_pool is not None:
+            gpu_pool.put(device)
+
+
+def _run_single_model_action_impl(payload: Dict[str, Any]) -> Dict[str, Any]:
     from core import create_data_module, run_cross_validation, run_evaluation, run_inference, setup_env
 
     action = payload["action"]
@@ -351,7 +383,13 @@ def _run_single_model_action(payload: Dict[str, Any]) -> Dict[str, Any]:
     ):
         cfg = _build_runtime_cfg(payload)
         if action in {"train", "evaluate"}:
-            manifest_path = _write_manifest(cfg, payload, action, os.path.join(cfg.GENERAL.log_dir, "manifest.yaml"))
+            manifest_path = os.path.join(cfg.GENERAL.log_dir, "manifest.yaml")
+            # Every fold of one train()/evaluate() call shares this
+            # timestamp dir (see _build_runtime_cfg) — only the first fold
+            # writes the run-level manifest so parallel fold processes
+            # don't race on the same file.
+            if payload.get("fold") in (None, 0):
+                manifest_path = _write_manifest(cfg, payload, action, manifest_path)
         elif cfg.DATA.name.startswith("_wsi_predict/"):
             # WSI-predict output has no per-target directory (see
             # cfg.DATA.pred_path below), and output_dir is commonly reused
@@ -400,7 +438,7 @@ def _run_single_model_action(payload: Dict[str, Any]) -> Dict[str, Any]:
                     "skipped": True,
                     "skip_reason": "MODEL.skip_train=true",
                 }
-            folds = list(range(cfg.TRAINING.num_k))
+            folds = [payload.get("fold")] if payload.get("fold") is not None else list(range(cfg.TRAINING.num_k))
             for fold in folds:
                 with logger.section("fold", action=action, model=payload["model"], data=payload["data"], fold=fold):
                     cfg.DATA.fold = fold
@@ -586,6 +624,71 @@ def _user_gene_overlap(
     }, missing
 
 
+def _deepspotm_gene_vocab(model_section: Dict[str, Any]) -> Optional[List[str]]:
+    """Read DeepSpotM's fixed gene vocabulary from its lightweight tokens.csv
+    sidecar file (not the full model weights). DeepSpotM.genes_to_indices()
+    hard-fails with KeyError on any gene outside this vocabulary, so a
+    dataset's HVG panel must be restricted to the overlap before evaluation."""
+    repo_id_or_path = model_section.get("repo_id_or_path")
+    if not repo_id_or_path:
+        return None
+    try:
+        if os.path.isdir(repo_id_or_path):
+            token_path = os.path.join(repo_id_or_path, "tokens.csv")
+        else:
+            from huggingface_hub import hf_hub_download
+            token_path = hf_hub_download(repo_id_or_path, "tokens.csv")
+        tokens = pd.read_csv(token_path)
+        return tokens.loc[tokens["token_type"] == "gene", "token"].tolist()
+    except Exception:
+        return None
+
+
+# Registry of models with their own fixed/limited gene vocabulary, readable
+# cheaply (without loading full model weights) to restrict train/eval to
+# genes the model actually supports. Applies whether the model is used
+# zero-shot (skip_train=true) or fine-tuned (skip_train=false) — a fixed
+# vocabulary is a property of the model architecture, not of whether this
+# run trains it. Models not listed here are assumed to have no such
+# restriction (current behavior, unchanged).
+_MODEL_GENE_VOCAB_RESOLVERS = {
+    "deepspotm.DeepSpotMModule": _deepspotm_gene_vocab,
+}
+
+
+def _model_gene_vocab(model_section: Dict[str, Any]) -> Optional[set]:
+    resolver = _MODEL_GENE_VOCAB_RESOLVERS.get(model_section.get("model_name"))
+    if resolver is None:
+        return None
+    vocab = resolver(model_section)
+    return set(vocab) if vocab is not None else None
+
+
+def _restrict_to_model_gene_vocab(cfg) -> None:
+    """Restrict cfg.DATA's gene panel to the overlap with the model's own
+    fixed vocabulary (if it has one — see _MODEL_GENE_VOCAB_RESOLVERS), for
+    both training and evaluation. Composes with any restriction already
+    applied (e.g. _external_gene_overlap): operates on whatever panel is
+    current, and gene_output_indices stays relative to the *original* full
+    training panel per _slice_gene_outputs' contract."""
+    vocab = _model_gene_vocab(cfg.MODEL)
+    if vocab is None:
+        return
+    if cfg.DATA.get("genes_override"):
+        base_genes = list(cfg.DATA.genes_override)
+        base_indices = list(cfg.DATA.gene_output_indices)
+    else:
+        import json as _json
+        with open(cfg.MODEL.gene_path) as f:
+            base_genes = _json.load(f)["genes"]
+        base_indices = list(range(len(base_genes)))
+    keep = [i for i, g in enumerate(base_genes) if g in vocab]
+    if len(keep) < len(base_genes):
+        cfg.DATA.genes_override = [base_genes[i] for i in keep]
+        cfg.DATA.num_outputs = len(keep)
+        cfg.DATA.gene_output_indices = [base_indices[i] for i in keep]
+
+
 def _classify_predict_target(data: str, repo_root: str = ".") -> str:
     """Classify predict()'s `data` argument.
 
@@ -650,10 +753,17 @@ def _build_runtime_cfg(payload: Dict[str, Any]):
     log_dir_parent = os.path.join(cfg.GENERAL.log_path, train_data, cfg.MODEL.name)
 
     if action == "train":
-        timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+        # Honor a timestamp threaded in by _run_models (shared across all
+        # fold payloads of one train() call) so parallel fold processes
+        # land in the same run directory instead of each minting their own.
+        timestamp = payload.get("timestamp") or datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
         cfg.GENERAL.timestamp = timestamp
         cfg.GENERAL.log_dir = os.path.join(log_dir_parent, timestamp)
         cfg.MODEL.data_dir = cfg.DATA.get("meta_dir", cfg.DATA.data_dir)
+        train_meta_dir = cfg.DATA.get("meta_dir", cfg.DATA.data_dir)
+        gene_path = f"{train_meta_dir}/{cfg.DATA.gene_type}_{cfg.DATA.num_genes}genes.json"
+        cfg.MODEL.gene_path = gene_path if os.path.isfile(gene_path) else f"{cfg.DATA.data_dir}/{cfg.DATA.gene_type}_{cfg.DATA.num_genes}genes.json"
+        _restrict_to_model_gene_vocab(cfg)
         if not payload["debug"]:
             os.makedirs(cfg.GENERAL.log_dir, exist_ok=True)
             with open(os.path.join(cfg.GENERAL.log_dir, "config.yaml"), "w") as f:
@@ -719,6 +829,7 @@ def _build_runtime_cfg(payload: Dict[str, Any]):
                 cfg.DATA.genes_override = overlap["genes"]
                 cfg.DATA.num_outputs = len(overlap["genes"])
                 cfg.DATA.gene_output_indices = overlap["indices"]
+        _restrict_to_model_gene_vocab(cfg)
         if payload["data"] == train_data:
             cfg.DATA.pred_path = f"{cfg.DATA.output_dir}/{cfg.DATA.name}/{cfg.MODEL.name}"
         else:
@@ -1363,10 +1474,14 @@ class STPred:
             return {"dry_run": False, "plan": plan}
 
     def train(self, data: Optional[str] = None, folds: Optional[Sequence[int]] = None) -> BenchmarkResult:
-        """Train all models on an internal dataset."""
+        """Train all models on an internal dataset.
 
-        if folds is not None:
-            raise NotImplementedError("train(folds=...) is not supported by the current runner.")
+        `folds` is optional — omit it to train every fold (`TRAINING.num_k`)
+        as before. Pass an explicit subset/full list (e.g. `range(num_k)`)
+        to have each fold dispatched as its own payload, which — combined
+        with `gpu > 1` — trains folds in parallel across GPUs instead of
+        sequentially in one process.
+        """
         data = data or self.state.get("internal_data")
         if data is None:
             raise ValueError("data must be provided for train() before internal state is set.")
@@ -2581,13 +2696,37 @@ class STPred:
         train_data_cfg = self._resolve_data(train_data)
         model_cfgs = self._resolve_models(models)
         payloads = []
-        fold_values = list(folds) if folds is not None else [None]
+        default_fold_values = list(folds) if folds is not None else [None]
 
-        for index, model_cfg in enumerate(model_cfgs):
+        for model_cfg in model_cfgs:
             runtime_config = self._merged_runtime_config(data_cfg, model_cfg)
             self._merged_runtime_config(train_data_cfg, model_cfg)
             config_key = f"{train_data_cfg.name}/{model_cfg.name}"
-            for fold in fold_values:
+
+            training_pipeline = runtime_config.get("MODEL", {}).get("training_pipeline", {})
+            if isinstance(training_pipeline, str):
+                training_pipeline = {"kind": training_pipeline}
+            is_sepal_two_stage = training_pipeline.get("kind") == "sepal_two_stage"
+
+            if action == "train" and not is_sepal_two_stage:
+                # Default to one payload per fold (not one payload that
+                # internally loops every fold) so folds can be dispatched to
+                # separate GPUs by the ProcessPoolExecutor below. All folds
+                # of this model share one timestamp, generated once here,
+                # so they land in the same run directory regardless of
+                # whether they end up running sequentially or in parallel.
+                # (sepal_two_stage is excluded: it's dispatched as a single
+                # "sepal_train" payload that manages its own fold loop —
+                # see _build_sepal_train_payload below.)
+                num_k = int(runtime_config.get("TRAINING", {}).get("num_k", 1))
+                model_fold_values = list(folds) if folds is not None else list(range(num_k))
+                model_timestamp = self._value_for_model(timestamps, model_cfg.name) or \
+                    datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+            else:
+                model_fold_values = default_fold_values
+                model_timestamp = None
+
+            for fold in model_fold_values:
                 payload = {
                     "repo_root": self.repo_root,
                     "runtime_config": runtime_config,
@@ -2600,9 +2739,12 @@ class STPred:
                     "model_config": model_cfg.path,
                     "action": action,
                     "fold": fold,
-                    "timestamp": self._value_for_model(timestamps, model_cfg.name),
+                    "timestamp": model_timestamp if action == "train" else self._value_for_model(timestamps, model_cfg.name),
                     "ckpt_path": self._value_for_model(ckpt_path, model_cfg.name),
-                    "gpu_id": self.gpu_id + (index % self.gpu),
+                    # Round-robin over the flat payload list (not the
+                    # model index) so each fold of the same model also gets
+                    # a distinct GPU instead of colliding on one.
+                    "gpu_id": self.gpu_id + (len(payloads) % self.gpu),
                     "debug": self.debug,
                     "verbose": self.verbose,
                     "log_file": self.log_file,
@@ -2611,10 +2753,7 @@ class STPred:
                     "gene_list": list(gene_list) if gene_list is not None else None,
                     "batch_size": batch_size,
                 }
-                training_pipeline = runtime_config.get("MODEL", {}).get("training_pipeline", {})
-                if isinstance(training_pipeline, str):
-                    training_pipeline = {"kind": training_pipeline}
-                if action == "train" and training_pipeline.get("kind") == "sepal_two_stage":
+                if action == "train" and is_sepal_two_stage:
                     payload.update(self._build_sepal_train_payload(data_cfg, model_cfg, runtime_config))
                 if (
                     action == "predict"
@@ -2674,30 +2813,52 @@ class STPred:
             else:
                 results = []
                 max_workers = min(self.gpu, len(payloads))
-                with ProcessPoolExecutor(max_workers=max_workers) as executor:
-                    future_to_payload = {
-                        executor.submit(_run_single_model_action, payload): payload
-                        for payload in payloads
-                    }
+                # Actions with no gpu_id-based sharding requirement (train,
+                # evaluate) claim a device dynamically from a shared pool
+                # instead of a static round-robin guess made before any
+                # payload has actually run — with payload count > gpu count
+                # and folds/models finishing at different times, a static
+                # guess can put two payloads on the same physical GPU while
+                # another sits idle. predict keeps its existing static
+                # payload["gpu_id"] (it doubles as a sample-sharding index
+                # there, which must stay a stable, pre-known value).
+                pool_actions = {"train", "evaluate"}
+                manager = multiprocessing.Manager() if any(p["action"] in pool_actions for p in payloads) else None
+                if manager is not None:
+                    gpu_pool = manager.Queue()
+                    for device in range(self.gpu_id, self.gpu_id + self.gpu):
+                        gpu_pool.put(device)
                     for payload in payloads:
-                        self.logger.info(
-                            "model_submit",
-                            action=action,
-                            model=payload["model"],
-                            data=payload["data"],
-                            gpu_id=payload["gpu_id"],
-                        )
-                    for future in as_completed(future_to_payload):
-                        payload = future_to_payload[future]
-                        result = future.result()
-                        self.logger.info(
-                            "model_complete",
-                            action=action,
-                            model=payload["model"],
-                            data=payload["data"],
-                            gpu_id=payload["gpu_id"],
-                        )
-                        results.append(result)
+                        if payload["action"] in pool_actions:
+                            payload["gpu_pool"] = gpu_pool
+                try:
+                    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                        future_to_payload = {
+                            executor.submit(_run_single_model_action, payload): payload
+                            for payload in payloads
+                        }
+                        for payload in payloads:
+                            self.logger.info(
+                                "model_submit",
+                                action=action,
+                                model=payload["model"],
+                                data=payload["data"],
+                                gpu_id=payload["gpu_id"],
+                            )
+                        for future in as_completed(future_to_payload):
+                            payload = future_to_payload[future]
+                            result = future.result()
+                            self.logger.info(
+                                "model_complete",
+                                action=action,
+                                model=payload["model"],
+                                data=payload["data"],
+                                gpu_id=result.get("gpu_id", payload["gpu_id"]),
+                            )
+                            results.append(result)
+                finally:
+                    if manager is not None:
+                        manager.shutdown()
 
         return BenchmarkResult({
             "dry_run": False,
@@ -2720,6 +2881,14 @@ class STPred:
                     "prediction_dirs": {},
                 },
             )
+            # When a model's folds ran as separate (possibly parallel)
+            # payloads, take the max elapsed_sec across them — that
+            # approximates parallel wall-clock time instead of reporting
+            # whichever fold's result happened to merge first.
+            if result.get("elapsed_sec") is not None:
+                model_summary["elapsed_sec"] = max(
+                    model_summary.get("elapsed_sec") or 0, result["elapsed_sec"]
+                )
             artifacts = result.get("artifacts", {})
             for fold, fold_artifact in artifacts.get("folds", {}).items():
                 if fold_artifact.get("metrics"):

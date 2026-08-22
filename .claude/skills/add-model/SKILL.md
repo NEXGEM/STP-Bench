@@ -66,6 +66,62 @@ step below.
   | `none` + `use_emb: false` | `img` — raw patch images |
   | `all` | `img_emb` — all features concatenated |
 
+## Inference-time batch chunking
+
+Train batches are small and dataloader-controlled (`DATA.train_dataloader.
+batch_size`). Val/test/predict batches are not: `STDataset`'s test-phase
+`__getitem__` returns one *whole slide's* spots as a single item, so the
+val/test/predict `DataLoader` (batch_size from `DATA.test_dataloader`, often
+left at its default) hands your model every spot of a held-out slide — easily
+1000+ — in one forward call. A model that trains fine at `batch_size: 16`
+can OOM the instant it hits its first real validation pass, because nothing
+exercises that path until an actual fold trains far enough to validate. This
+bit `AsymST` in practice: DenseNet121+UNI2-h forward on ~1270 spots at once
+during validation OOM'd in `batch_norm`, even though training itself (batch
+16) had been running cleanly for a full epoch.
+
+The fix, already used by ~18 models in this repo (`grep -rl max_batch_size
+src/model/` before inventing your own variant) — accept a `max_batch_size`
+constructor kwarg (default e.g. `1024`) and split any inference-phase batch
+bigger than it before the expensive part of `forward`, concatenating results
+after. Minimal version (`src/model/st_net/st_net.py`):
+
+```python
+def forward(self, img, label=None, **kwargs):
+    phase = kwargs.get('phase', 'train')
+    if phase == 'train':
+        output = self.model(img)
+    elif img.shape[0] > self.max_batch_size:
+        output = torch.cat([self.model(c) for c in img.split(self.max_batch_size, dim=0)], dim=0)
+    else:
+        output = self.model(img)
+    ...
+```
+
+Gate on `phase != 'train'` (the `phase` kwarg the adapter always passes — see
+`src/model/EGN/EGN.py`, `src/model/TRIPLEX/TRIPLEX.py`) or equivalently
+`not self.training`; train batches are already small, so there's nothing to
+chunk there, and if `forward` computes a multi-term training loss you cannot
+split it mid-computation without risking a different backward graph. If the
+model has multiple auxiliary heads/losses like `AsymST`, chunk only the
+shared per-chunk predictions and compute the loss once over the concatenated
+result, so a chunked pass produces bit-for-bit the same output as an
+unchunked one — verify this with a unit test (small fake batch, compare
+`max_batch_size=len(batch)` vs. a small value) before trusting a real run.
+
+**Exception — don't chunk if the model is genuinely slide-level.** Some
+architectures need every spot of a slide together in one forward pass because
+spots attend to or message-pass with each other — chunking would silently
+change predictions, not just save memory. `st_flow.StFlow`'s denoiser is the
+concrete example already in this repo: `sample()` asserts
+`img_features.shape[0] == 1` and treats the whole slide's spot sequence as
+one jointly-attended unit (`max_batch_size` is declared in its config but
+never actually used in `forward` — it's vestigial, not a working safeguard).
+GNN-based models (EGGN, SGN) are the same in spirit: message passing needs
+the whole graph. If you're integrating a model like this, say so explicitly
+in a comment near `forward` (so a future editor doesn't "fix" the missing
+chunking) and pair it with the matching datamodule policy below.
+
 ## Step 2 — `__init__.py`
 
 ```python
@@ -90,7 +146,25 @@ MODEL:
 DATA:
   dataset_name: STDataset   # or a custom dataset class, see below
   feature_type: global
+  model_name: uni_v2        # patch encoder — see Patch encoder vs. architecture below
 ```
+
+**Patch encoder vs. architecture**: for any model using
+`feature_type: global/neighbor/target/all`, `DATA.model_name` picks the
+**patch encoder** — a choice deliberately kept separate and swappable from
+the model's own architecture (`MODEL.*`). Default it to `uni_v2` (the
+benchmark's standard encoder) unless you have a specific reason not to:
+every such model is benchmarked against that same encoder, which is what
+makes a `PearsonCorrCoef` difference between models a statement about
+*architecture*, not about which encoder happened to extract better
+features. Changing it for only some models silently breaks that shared
+comparison basis. Models that instead bring their own internal image
+encoder (`feature_type: none` with a custom CNN/ViT backbone in the model
+class itself — see `src/model/AsymST/` — or a zero-shot foundation model
+with fixed pretrained weights, e.g. DeepSpotM) aren't on this comparison
+axis at all — say so explicitly in the config's comments, so results don't
+get silently read as "architecture X beats architecture Y" when the real
+difference is the encoder.
 
 Verify: `stp.list_available_models()` should show `<ClassName>` immediately —
 adding the config is what makes it discoverable. (`stp.list_models()` is a
@@ -121,6 +195,29 @@ Skipping this import is a silent failure mode — `MODEL.adapter: my_adapter`
 will raise `Unknown model adapter` (or, if a class fallback happens to match,
 silently resolve to the wrong adapter) rather than something obviously wrong
 at the model class itself.
+
+## Datamodule policies
+
+A different knob from the adapter: `src/core/datamodule_policies.py` decides
+*how batches are constructed and iterated* (the adapter decides what happens
+to a batch once built). Set via `DATA.datamodule_policy: <name>` in the model
+config; unset falls back to `default`.
+
+- **`default`** — a plain `torch.utils.data.DataLoader` over your dataset,
+  sized by `DATA.train_dataloader`/`DATA.test_dataloader`. What you get
+  unless you ask for something else.
+- **`graph`** — the same shape but backed by PyTorch Geometric's `DataLoader`,
+  for datasets that yield PyG `Data` objects (see `config/model/EGGN.yaml`,
+  `config/model/SGN.yaml`).
+- **`direct`** — val/test/predict skip the `DataLoader` entirely and iterate
+  the dataset object itself, so the dataset's own `__getitem__`/iteration
+  defines what "one step" means (see `config/model/Sepal.yaml`).
+
+`graph`/`direct` models are exactly the "genuinely slide-level" models from
+the chunking section above — the two choices tend to travel together, since
+both stem from the same fact: the model needs a whole slide's structure
+(graph edges, or dataset-defined iteration) as one unit, not an arbitrary
+per-spot batch a generic `DataLoader` would produce.
 
 ## Optional: custom dataset class
 
@@ -180,6 +277,20 @@ stp.preprocess(data="ncche/xenium")
 stp.train(data="ncche/xenium")
 stp.evaluate_internal()
 ```
+
+Calling `stp.train()` and having it start is not verification — it only
+proves the train-phase path works, which is the smaller, dataloader-batched
+half of the model contract. Let it actually run until the first validation
+pass completes (watch the fold's `metrics.csv` for a populated
+`val_<metric>`/`val_target` row, or tail the run's log for the validation
+progress bar reaching 100%), not just a handful of training steps. This is
+the only way to exercise the val/test-phase code path — whole-slide batches,
+`label=None` inference branches, `max_batch_size` chunking if you added it —
+none of which a short train-only smoke test touches. The `AsymST` OOM bug
+this section's chunking guidance is based on only surfaced this way: training
+(batch 16) ran cleanly for a full epoch, then the first validation pass
+(~1270 spots in one forward call) crashed immediately. A smoke test that
+declared success after a few training steps would have missed it entirely.
 
 If an external dataset is in scope, also run
 `stp.evaluate_external(data=..., train_data="ncche/xenium")` — this repo's

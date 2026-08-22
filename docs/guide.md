@@ -577,7 +577,22 @@ MODEL:
 DATA:
   dataset_name: STDataset
   feature_type: global           # which patch embeddings to load
+  model_name: uni_v2             # patch encoder — keep at the benchmark default
 ```
+
+`DATA.model_name` picks the **patch encoder**, a choice kept separate and
+swappable from `MyModel`'s own architecture (`MODEL.*`). Default it to
+`uni_v2` — every model that consumes pre-extracted embeddings is benchmarked
+against that same encoder, which is what makes a `PearsonCorrCoef`
+difference between models a statement about architecture rather than about
+which encoder happened to produce better features. Only change it if you
+have a specific reason to and are aware you're leaving that shared
+comparison basis. Models that instead bring their own internal image
+encoder (`feature_type: none` with a custom backbone in the model class, or
+a zero-shot foundation model with fixed pretrained weights) aren't on this
+axis at all — say so explicitly in a config comment, so results don't get
+silently read as "architecture X beats architecture Y" when the real
+difference is the encoder.
 
 That's it. `MyModel` will appear in `STPred.list_available_models()` — the
 config-discovery view, not `list_models()`, which only echoes back whatever

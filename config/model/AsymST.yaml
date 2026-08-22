@@ -1,0 +1,34 @@
+MODEL:
+  model_name: AsymST.AsymST
+  # Local path to MahmoodLab/UNI2-h's pytorch_model.bin (gated HF repo --
+  # request access, then `huggingface-cli login` and download, or point
+  # this at an existing local snapshot). This integration targets UNI2-h
+  # specifically (vit_giant_patch14_224, embed_dim=1536), not the original
+  # UNI(v1) the AsymST paper used -- see src/model/AsymST/vit_encoder.py.
+  uni_weights_path: /path/to/uni2-h/pytorch_model.bin
+  cnn_pretrained: true
+  cnn_train_backbone: true
+  vit_freeze_strategy: partial
+  vit_unfreeze_last_n: 4
+  vit_drop_path: 0.0
+  fusion_heads: 16
+  fusion_depth: 1
+  dropout: 0.1
+  fuse_head_hidden_dim: 1024
+  # Multi-objective loss weights (fused-branch MSE + Pearson-correlation,
+  # plus shallow CNN/ViT auxiliary MSE heads) -- see AsymST.forward().
+  w_fuse: 1.0
+  w_cnn: 0.3
+  w_vit: 0.3
+  w_pcc: 0.5
+  adapter: default
+DATA:
+  dataset_name: STDataset
+  feature_type: none
+  use_emb: false
+  # A giant ViT (UNI2-h) forward+backward on 224x224 images is far more
+  # memory-hungry per sample than the embedding-based models most dataset
+  # configs' batch sizes (often 128) are tuned for -- override down to a
+  # size the backbone can actually fit, same reasoning as DeepSpotMFT.yaml.
+  train_dataloader:
+    batch_size: 16
