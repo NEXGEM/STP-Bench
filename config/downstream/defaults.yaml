@@ -1,0 +1,35 @@
+gene_enrichment:
+  library: MSigDB_Hallmark_2020
+  score_method: rank_mean
+  min_overlap: 5
+  cache_dir: output/downstream_cache/genesets
+deconvolution:
+  labels_key: cell_type_predicted
+  batch_key: sample
+  reference_layer: count
+  reference_epochs: 250
+  reference_batch_size: 2500
+  reference_posterior_samples: 1000
+  spatial_epochs: 30000
+  spatial_batch_size: 2048
+  spatial_posterior_samples: 1000
+  n_cells_per_location: 30
+  detection_alpha: 200
+  max_cells_per_label: null
+  accelerator: auto
+spatial_domain:
+  n_clusters: 7
+  p: 0.5
+  l_start: 0.01
+  l_end: 1000
+  l_tol: 0.01
+  l_max_run: 100
+  res_start: 0.2
+  res_step: 0.1
+  tol: 5.0e-3
+  lr: 0.05
+  search_epochs: 20
+  max_epochs: 200
+  refine: true
+  refine_shape: square
+  seed: 100

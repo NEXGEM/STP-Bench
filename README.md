@@ -26,6 +26,7 @@ outside that comparison axis — see
 ## Updates
 
 - **2026-08-22** — Added **AsymST** as a new DenseNet-121 + UNI2-h fusion model.
+- **2026-08-21** — Added **downstream analyses** (`stp.downstream(...)`): gene-set enrichment, cell-type deconvolution, and spatial-domain identification on top of predicted ST — see [Downstream Analyses](#downstream-analyses).
 - **2026-07-17** — Added **DeepSpotM** as a new zero-shot pretrained model.
 - **2026-05-28** — Initial release.
 
@@ -67,6 +68,16 @@ only on machines where RAPIDS CUDA 12 packages are supported:
 
 ```bash
 INSTALL_CUDA_EXTRAS=1 bash scripts/create_env.sh .stpbench
+```
+
+#### Optional: Downstream Analyses Extras
+
+[Downstream analyses](#downstream-analyses) (`stp.downstream(...)`) need
+`cell2location` / `SpaGCN` for the `deconvolution` / `spatial_domain`
+modes — heavier dependencies, not installed by the setup script by default:
+
+```bash
+uv pip install -r requirements/downstream.txt
 ```
 
 #### Manual Setup
@@ -225,6 +236,7 @@ parameter references and examples of every one of these:
 - `stp.evaluate_internal(data=None)` / `stp.evaluate_external(data, train_data=None)`: evaluate on internal test folds, or a labeled external dataset.
 - `stp.benchmark(internal_data, external_data=None)`: preprocess, train, internal evaluate, and optionally external predict/evaluate, in one call.
 - `stp.predict(data, train_data=None, ...)`: predict on slide-image-only data — a named config, or (see [Easy Inference Directly on a WSI](docs/guide.md#easy-inference-directly-on-a-wsi)) a bare WSI file/directory/asset dir with no config to write.
+- `stp.downstream(mode, prior_result=None, ...)`: run gene-set enrichment, cell-type deconvolution, or spatial-domain clustering on predicted ST, optionally compared against ground truth — see [Downstream Analyses](#downstream-analyses).
 - `stp.visualize(gene, sample, ...)`: render a predicted gene's expression for one sample on the slide's own thumbnail. See [Visualizing a Prediction](docs/guide.md#visualizing-a-prediction).
 
 Every workflow method above returns a `BenchmarkResult` (dict-compatible,
@@ -310,6 +322,121 @@ no per-slide directory, since `output_dir` is commonly reused across
 separate calls on different slides and samples are already distinguished by
 their own `<sample>.h5ad` filename. Provenance manifests land one level up,
 one per sample: `<output_dir>/_wsi_predict/manifests/<sample>.yaml`.
+
+## Downstream Analyses
+
+On top of predicted ST expression, `stp.downstream(mode=...)` runs three
+biologically-oriented analyses and, by default, compares each against the
+same analysis run on ground-truth ST — so you see not just per-gene
+accuracy, but whether biologically meaningful structure survives
+prediction:
+
+- `"gene_enrichment"` — pathway activity scoring (ssGSEA / rank-based) via
+  [gseapy](https://github.com/zqfang/GSEApy), correlated pathway-by-pathway
+  against ground truth.
+- `"deconvolution"` — per-spot cell-type abundance via
+  [cell2location](https://github.com/BayraktarLab/cell2location), correlated
+  cell-type-by-cell-type against ground truth.
+- `"spatial_domain"` — spatial domain clustering via
+  [SpaGCN](https://github.com/jianhuupenn/SpaGCN), compared against
+  ground-truth-derived domains (ARI / NMI / AMI + Hungarian-matched label
+  accuracy).
+
+```python
+eval_res = stp.evaluate_internal(data="ncche/xenium")
+
+enrichment = stp.downstream(mode="gene_enrichment", prior_result=eval_res)
+domains    = stp.downstream(mode="spatial_domain", prior_result=eval_res)
+deconv     = stp.downstream(
+    mode="deconvolution",
+    prior_result=eval_res,
+    overrides={"reference_path": "/path/to/single_cell_reference.h5ad"},
+)
+
+print(enrichment.summary())
+enrichment.save("gene_enrichment_metrics.csv")
+```
+
+Prediction files are located automatically: pass the `BenchmarkResult` from a
+prior `evaluate()`/`predict()` call as `prior_result`, or give `data`/
+`train_data`/`folds` directly and `downstream()` recomputes the same
+prediction-path convention `evaluate()` itself uses. Set
+`evaluate_against_gt=False` to only run the analysis on predictions, with no
+ground truth needed.
+
+Returns a `DownstreamResult` — the same dict-compatible shape as
+`BenchmarkResult` (`.summary()`, `.to_dataframe()`, `.save("results.csv")`).
+
+<details>
+<summary><strong>Downstream analysis details</strong> (dependencies, reference data, config, output layout)</summary>
+
+#### Dependencies
+
+`gene_enrichment` and `spatial_domain` need `gseapy` / `leidenalg` /
+`python-igraph` (already in `requirements/runtime.txt`). `deconvolution`
+and `spatial_domain` additionally need `cell2location` / `SpaGCN`, kept in a
+separate `requirements/downstream.txt` — heavier, and not installed by
+`scripts/create_env.sh` by default:
+
+```bash
+uv pip install -r requirements/downstream.txt
+```
+
+#### Reference data
+
+`gene_enrichment`'s pathway library (e.g. `MSigDB_Hallmark_2020`) is fetched
+automatically from Enrichr via `gseapy` and cached under
+`DATA.downstream.gene_enrichment.cache_dir` — point `library` at a local
+`.gmt` file instead if the machine has no internet access.
+
+`deconvolution` needs a labeled single-cell reference atlas
+(`.obs[labels_key]` cell-type labels, `.obs[batch_key]` batch,
+`.var['feature_name']` gene symbols, `.layers['count']` raw counts) — set
+its path once per dataset:
+
+```yaml
+DATA:
+  downstream:
+    deconvolution:
+      reference_path: /path/to/single_cell_reference.h5ad   # per-tissue scRNA-seq atlas
+```
+
+Any labeled scRNA-seq atlas for the tissue of interest works, as long as it
+matches the format above. Public atlases we've validated this against:
+
+| Tissue | Atlas | Reference | Source |
+|---|---|---|---|
+| Lung | LuCA (Lung Cancer Atlas) — core atlas | Salcher S, Sturm G, Horvath L, et al. "High-resolution single-cell atlas reveals diversity and plasticity of tissue-resident neutrophils in non-small cell lung cancer." *Cancer Cell*, 2022. | [cellxgene collection](https://cellxgene.cziscience.com/collections/edb893ee-4066-4128-9aec-5eb2b03f8287) — "core atlas" dataset, ~890k cells |
+| Breast | HBCA (Human Breast Cell Atlas) — global | Kumar T, Nee K, Wei R, et al. "A spatially resolved single-cell genomic atlas of the adult human breast." *Nature*, 2023. | not yet linked here — see the paper |
+
+cellxgene exports commonly store raw counts in `.raw.X` rather than a named
+`.layers['count']`, and use their own `.obs`/`.var` column names — you'll
+likely need to re-save a copy with `.X`/`.layers['count']` set to `.raw.X`
+and `labels_key`/`batch_key` pointed at whatever columns the atlas actually
+has (e.g. `cell_type`/`donor_id`) before `reference_path` will work as-is.
+
+`spatial_domain` needs no external reference — it clusters directly on
+predicted/ground-truth expression and spatial coordinates.
+
+#### Config
+
+Mode-specific hyperparameter defaults live in
+`config/downstream/defaults.yaml`; override per dataset under
+`DATA.downstream.<mode>` in the data config, or per call via
+`downstream(..., overrides={...})`.
+
+#### Output layout
+
+Extends the existing prediction path:
+
+```
+<DATA.output_dir>/<data>/<model>/[<train_data>/]fold<k>/downstream/<mode>/
+    <sample>.csv / <sample>.h5ad     # analysis run on PREDICTED expression
+    eval/metrics.csv                 # comparison vs. ground truth
+    eval/gt/                         # cached ground-truth-side results
+```
+
+</details>
 
 ## Extending STP-Bench
 
