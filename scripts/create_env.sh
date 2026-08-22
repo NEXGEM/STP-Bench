@@ -11,7 +11,10 @@ uv venv --python "${PYTHON_VERSION}" "${ENV_DIR}"
 
 PYTHON_BIN="${ENV_DIR}/bin/python"
 
-uv pip install --python "${PYTHON_BIN}" --upgrade pip setuptools wheel packaging ninja
+# setuptools>=81 dropped the bundled pkg_resources module; scanpy's louvain
+# clustering path (used by downstream spatial_domain) still imports it at
+# runtime, so pin below that to keep pkg_resources available.
+uv pip install --python "${PYTHON_BIN}" --upgrade pip "setuptools<81" wheel packaging ninja
 
 echo "Installing PyTorch CUDA 11.8 stack..."
 uv pip install --python "${PYTHON_BIN}" -r requirements/torch-cu118.txt

@@ -153,3 +153,99 @@ class BenchmarkResult(Mapping):
         action = self.payload.get("plan", {}).get("action", "benchmark")
         results = len(self.payload.get("results", []))
         return f"BenchmarkResult(action={action!r}, dry_run={self.dry_run}, results={results})"
+
+
+class DownstreamResult(Mapping):
+    """Dictionary-compatible result object returned by STPred.downstream().
+
+    Deliberately NOT a BenchmarkResult: train/evaluate/predict results are
+    scalar metrics per fold (`metric/<key>`), which `to_records()`/
+    `summary()` above flatten one row per fold. Downstream results are
+    inherently tabular per pathway / per cell-type / per-sample (the natural
+    shape `run_<mode>`/`evaluate_<mode>` already return as `per_sample`
+    rows), which doesn't fit that scalar-per-fold shape without lossy
+    reshaping. This wraps the same `{"dry_run", "plan", "results"}` payload
+    shape for consistency, but exposes tabular-first accessors instead.
+    """
+
+    def __init__(self, payload: Dict[str, Any]):
+        self.payload = payload
+
+    def __getitem__(self, key: str) -> Any:
+        return self.payload[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.payload)
+
+    def __len__(self) -> int:
+        return len(self.payload)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self.payload.get(key, default)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return dict(self.payload)
+
+    def results(self) -> List[Dict[str, Any]]:
+        return list(self.payload.get("results", []))
+
+    def plan(self) -> Dict[str, Any]:
+        return self.payload.get("plan", {})
+
+    def to_dataframe(self):
+        """One row per (model, fold, sample, pathway/cell-type) comparison —
+        concatenates every result's `evaluate.per_sample` rows (see
+        `downstream/gene_enrichment/evaluate.py` etc. for the exact row
+        shape per mode) with model/fold/mode columns attached."""
+        try:
+            import pandas as pd
+        except ImportError as exc:
+            raise ImportError("DownstreamResult.to_dataframe() requires pandas.") from exc
+
+        rows: List[Dict[str, Any]] = []
+        for item in self.results():
+            base = {
+                "model": item.get("model"),
+                "data": item.get("data"),
+                "train_data": item.get("train_data"),
+                "mode": item.get("mode"),
+                "fold": item.get("fold"),
+            }
+            evaluate = item.get("evaluate") or {}
+            for row in evaluate.get("per_sample", []):
+                rows.append({**base, **row})
+        return pd.DataFrame(rows)
+
+    def summary(self) -> Dict[str, Any]:
+        """{model: {n_folds, mean_<metric>, std_<metric>, ...}} aggregated
+        across every pathway/cell-type/sample row and fold — the natural
+        cross-model comparison view for downstream metrics."""
+        df = self.to_dataframe()
+        if df.empty:
+            return {}
+        metric_cols = [
+            col for col in ("pearson", "spearman", "mae", "ari", "nmi", "ami", "hungarian_match_accuracy")
+            if col in df.columns
+        ]
+        result: Dict[str, Any] = {}
+        for model, group in df.groupby("model"):
+            entry: Dict[str, Any] = {"n_folds": int(group["fold"].nunique())}
+            for col in metric_cols:
+                vals = group[col].dropna()
+                if len(vals):
+                    entry[f"mean_{col}"] = float(vals.mean())
+                    entry[f"std_{col}"] = float(vals.std()) if len(vals) > 1 else 0.0
+            result[model] = entry
+        return result
+
+    def save(self, path: str) -> None:
+        self.to_dataframe().to_csv(path, index=False)
+
+    @property
+    def dry_run(self) -> bool:
+        return bool(self.payload.get("dry_run", False))
+
+    def __repr__(self) -> str:
+        mode = self.payload.get("plan", {}).get("mode", "downstream")
+        results = len(self.payload.get("results", []))
+        return f"DownstreamResult(mode={mode!r}, dry_run={self.dry_run}, results={results})"
