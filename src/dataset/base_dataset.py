@@ -2,6 +2,7 @@
 from glob import glob
 import os
 import json
+import time
 import warnings
 
 import numpy as np
@@ -16,6 +17,19 @@ from trident.wsi_objects.WSIFactory import load_wsi
 
 from core import normalize_adata
 from dataset.path_utils import emb_dir, patch_dir, st_dir
+
+
+def _open_h5(path, max_retries: int = 3, retry_delay: float = 2.0):
+    """Open an h5py file for reading, retrying on transient filesystem I/O
+    errors (observed on this shared NFS mount as intermittent 'Input/output
+    error' on an otherwise-healthy file) before giving up."""
+    for attempt in range(max_retries):
+        try:
+            return h5py.File(path, 'r')
+        except OSError:
+            if attempt == max_retries - 1:
+                raise
+            time.sleep(retry_delay)
 
 
 class STDataset(torch.utils.data.Dataset):
@@ -86,7 +100,7 @@ class STDataset(torch.utils.data.Dataset):
 
                 self.patcher = self._get_patcher(h5_path)
 
-                with h5py.File(h5_path, 'r') as f:
+                with _open_h5(h5_path) as f:
                     self.length = len(f['coords'])
             else:
                 self.name = data_id
@@ -274,7 +288,7 @@ class STDataset(torch.utils.data.Dataset):
             img_path = os.path.join(self.img_dir, f"{name}_patches.h5")
         if not os.path.isfile(img_path):
             return adata
-        with h5py.File(img_path, 'r') as f:
+        with _open_h5(img_path) as f:
             if 'barcode' not in f:
                 return adata
             patch_barcodes = f['barcode'][:].flatten().astype(str).tolist()
@@ -321,10 +335,10 @@ class STDataset(torch.utils.data.Dataset):
             # img = np.stack(img, axis=0)
         else:
             if idx is not None:
-                with h5py.File(path, 'r') as f:
+                with _open_h5(path) as f:
                     img = f['img'][idx]
             else:
-                with h5py.File(path, 'r') as f:
+                with _open_h5(path) as f:
                     img = f['img'][:]
             
         return img
@@ -427,7 +441,7 @@ class STDataset(torch.utils.data.Dataset):
             
         path = f"{emb_dir}/{emb_name}/features_{model_name}/{name}.h5"
         
-        with h5py.File(path, 'r') as f:
+        with _open_h5(path) as f:
             if 'features' in f.keys():
                 emb_key = 'features'
             elif 'embeddings' in f.keys():

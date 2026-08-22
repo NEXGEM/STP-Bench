@@ -17,7 +17,9 @@ class ContrastiveAdapter(ModelAdapter):
 
     def prepare_batch(self, module, batch, stage):
         batch = self.squeeze_batch(batch)
-        if stage == "test":
+        if stage == "train":
+            batch["dataset"] = module._trainer.train_dataloader.dataset
+        elif stage == "test":
             batch["dataset"] = module._trainer.test_dataloaders.dataset
         elif stage == "val":
             dl = module._trainer.val_dataloaders

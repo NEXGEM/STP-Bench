@@ -4,6 +4,7 @@ import os
 import sys
 import argparse
 import subprocess
+import warnings
 from glob import glob
 from pathlib import Path
 from typing import List, Dict, Union, Optional, Tuple
@@ -347,9 +348,16 @@ class DataPipeline:
         """Delete img dataset from neighbor h5 files after feature extraction."""
         print("Removing neighbor patch images to free disk space...")
         for h5_path in glob(f"{patch_dir}/*.h5"):
-            with h5py.File(h5_path, 'a') as f:
-                if 'img' in f:
-                    del f['img']
+            try:
+                with h5py.File(h5_path, 'a') as f:
+                    if 'img' in f:
+                        del f['img']
+            except PermissionError:
+                # Best-effort disk-space cleanup: some shared patch files
+                # are root-owned with no group write bit, so this can't
+                # always succeed. Failing to free space on one file must
+                # not crash the whole preprocessing run.
+                warnings.warn(f"Skipping neighbor-image cleanup for {h5_path}: no write permission.")
 
     def _get_sample_ids(self):
         """Get list of sample IDs from patches directory."""
