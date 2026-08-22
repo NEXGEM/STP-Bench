@@ -118,7 +118,15 @@ This catches missing/misconfigured paths before committing GPU time.
 - `<meta_dir>/ids.csv` has a `sample_id` column plus one `fold_N` column per
   requested fold, and every raw sample appears exactly once.
 - `<meta_dir>/<gene_type>_<num_genes>genes.json` exists with exactly
-  `num_genes` entries.
+  `num_genes` entries. Gene set preparation (`src/preprocess/get_geneset.py`)
+  *also* always writes `<meta_dir>/total_<N>genes.json` (every common gene
+  across the cohort, unrelated to `num_genes` — this is what models like
+  `BrSTNet` read for an auxiliary full-panel output) regardless of
+  `preprocess.geneset`/method. Check for the specific `<gene_type>_<num_genes>`
+  file by name, not just "a genes.json exists" — the pipeline's own
+  skip-if-done check (`DataPipeline._has_genesets`) globs for *any*
+  `*genes.json`, so a stray `total_*.json` left over from a previous run can
+  silently mask a missing primary panel file on a re-run.
 - `<data_dir>/patches/<sample_id>.h5` and `<data_dir>/st/<sample_id>.h5ad`
   exist for every sample.
 - Run an actual train + evaluate on one cheap model end to end
