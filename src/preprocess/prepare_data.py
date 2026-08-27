@@ -1,5 +1,6 @@
 import os
 import sys
+import warnings
 from glob import glob
 from tqdm import tqdm
 
@@ -284,6 +285,35 @@ def _read_hest_adata(sample_id, input_dir):
     raise FileNotFoundError(f"ST file not found for {sample_id} in {input_dir}")
 
 
+def _segment_tissue_safe(st):
+    """Segment tissue, preferring the deep-learning model but falling back
+    to Otsu thresholding when the WSI backend can't support it.
+
+    cuCIM's read_region (used when the `cucim` package is installed and a
+    slide can't be opened by OpenSlide, e.g. a non-tiled/non-pyramidal
+    TIFF) refuses any read that extends past the slide's bounds, unlike
+    OpenSlide's own read_region which auto-pads. Deep tissue segmentation
+    tiles the whole slide on a fixed grid, so its last row/column of tiles
+    routinely overruns the slide edge by design -- this is normal and
+    OpenSlide silently handles it, but cuCIM raises `ValueError: Cannot
+    handle the out-of-boundary cases`. Otsu thresholding works from a
+    downsampled thumbnail instead of full-res tiles, so it doesn't hit
+    this path at all.
+    """
+    try:
+        st.segment_tissue(method='deep')
+    except ValueError as exc:
+        if 'out-of-boundary' not in str(exc):
+            raise
+        warnings.warn(
+            "Deep tissue segmentation failed with a cuCIM out-of-boundary "
+            "read (see docstring of _segment_tissue_safe) -- falling back "
+            "to Otsu thresholding for this slide.",
+            stacklevel=2,
+        )
+        st.segment_tissue(method='otsu')
+
+
 def save_patches(name, input_dir, output_dir, platform='visium',
                  save_targets=True, save_neighbors=False,
                  num_n=25, dst_pixel_size=0.5, save_neighbor_imgs=False):
@@ -306,7 +336,7 @@ def save_patches(name, input_dir, output_dir, platform='visium',
         else:
             if st._tissue_contours is None:
                 print("Segmenting tissue...")
-                st.segment_tissue(method='deep')
+                _segment_tissue_safe(st)
 
             if level == 0:
                 print("Dumping target patches...")
@@ -339,7 +369,7 @@ def save_patches(name, input_dir, output_dir, platform='visium',
         else:
             if st._tissue_contours is None:
                 print("Segmenting tissue...")
-                st.segment_tissue(method='deep')
+                _segment_tissue_safe(st)
 
             n = int(np.sqrt(num_n))
             print("Dumping neighbor patches...")
@@ -350,16 +380,19 @@ def save_patches(name, input_dir, output_dir, platform='visium',
                 target_pixel_size=dst_pixel_size,
                 use_mask=False,
                 dump_visualization=False,
+                # When the images aren't going to be kept, skip creating
+                # them in the first place (coords_only=True) instead of
+                # reading/writing the full image array here and then
+                # deleting it right after -- for a neighbor grid this is a
+                # large array (target_patch_size**2 per spot), so building
+                # and immediately discarding it wastes significant time and
+                # memory for no benefit.
+                coords_only=not save_neighbor_imgs,
             )
             target_path = f"{output_dir}/patches/{name}.h5"
             neighbor_path = f"{output_dir}/patches/neighbor/{name}.h5"
             print("Matching neighbor patches to target patches...")
             match_to_target(target_path, neighbor_path)
-            if not save_neighbor_imgs:
-                print("Removing neighbor images (coords-only mode)...")
-                with h5py.File(neighbor_path, 'a') as f:
-                    if 'img' in f:
-                        del f['img']
 
     return st
 
