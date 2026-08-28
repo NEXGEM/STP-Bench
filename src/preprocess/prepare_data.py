@@ -23,6 +23,21 @@ MPP_TO_LEVEL = {
 }
 
 
+def _ensure_tif_aliases(hest_dir):
+    """hest._read_st() hardcodes the WSI path as wsis/{id}.tif, with no
+    fallback for other TIFF extensions. Some samples in shared datasets
+    are stored as .tiff -- symlink a .tif alias next to each one so
+    hest's lookup succeeds without duplicating the (often multi-GB) file."""
+    wsi_dir = os.path.join(hest_dir, 'wsis')
+    if not os.path.isdir(wsi_dir):
+        return
+    for entry in os.listdir(wsi_dir):
+        if entry.lower().endswith('.tiff'):
+            tif_alias = os.path.join(wsi_dir, entry[:-len('.tiff')] + '.tif')
+            if not os.path.exists(tif_alias):
+                os.symlink(entry, tif_alias)
+
+
 def _iter_hest(*args, **kwargs):
     try:
         from hest import iter_hest
@@ -37,6 +52,7 @@ def _iter_hest(*args, **kwargs):
         # tissue_seg dir (tissue_contours_path is only assigned inside that
         # branch). An empty dir makes it resolve to None instead of crashing.
         os.makedirs(os.path.join(hest_dir, 'tissue_seg'), exist_ok=True)
+        _ensure_tif_aliases(hest_dir)
     return iter_hest(*args, **kwargs)
 
 

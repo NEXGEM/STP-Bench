@@ -138,7 +138,7 @@ class DataPipeline:
             print(f"Processed data already found at {self.output_dir}. Skipping raw preprocessing.")
         else:
             save_neighbors = _wants_feature(self.config['feature_type'], 'neighbor')
-            preprocess_data(
+            ok = preprocess_data(
                 input_dir=self.input_dir,
                 output_dir=self.asset_dir,
                 meta_dir=self.metadata_dir,
@@ -154,6 +154,19 @@ class DataPipeline:
                 overwrite=self.config['overwrite'],
                 coords_path=self.config.get('coords_path'),
             )
+            # preprocess_data() runs prepare_data.py as a subprocess and
+            # returns False (after printing the subprocess's output) on a
+            # nonzero exit code instead of raising -- a per-sample crash
+            # partway through (e.g. one bad WSI file) must not be silently
+            # treated as "raw preprocessing done", or every step downstream
+            # (genesets/splits/feature extraction) proceeds against an
+            # incomplete patch set and fails confusingly much later, far
+            # from the actual cause.
+            if ok is False:
+                raise RuntimeError(
+                    f"Raw preprocessing failed for data_dir={self.asset_dir!r} (mode={mode!r}). "
+                    "See the subprocess output above for the actual error."
+                )
 
 
     def align_st(self, sample_ids: list = None, overwrite: bool = False):
