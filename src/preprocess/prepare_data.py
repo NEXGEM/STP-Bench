@@ -541,14 +541,53 @@ def extract_patches_from_coords_file(wsi_path, output_dir, coords_path, name=Non
     return out_path
 
 
+def extract_neighbor_patches_from_wsi(wsi_path, output_dir, name, dst_pixel_size=0.5,
+                                       patch_size=224, num_n=5, overwrite=False):
+    """Build a neighbor-grid coords file for a slide whose target patches
+    were just extracted from a raw WSI (mode='inference', extract_from_wsi=
+    True) — the 'raw'/'stpbench' modes get this via HEST's own dump_patches(),
+    but a bare WSI has no HESTData/adata to drive that, so neighbor centers
+    are re-derived here directly from the target patch file's own coords.
+
+    Mirrors extract_patches_from_coords_file's coords_to_h5 call shape, just
+    with centers/size computed from the existing target patches instead of
+    an external coords file.
+    """
+    from trident.IO import read_coords, coords_to_h5
+
+    out_path = os.path.join(output_dir, 'patches', 'neighbor', f'{name}_patches.h5')
+    if os.path.isfile(out_path) and not overwrite:
+        print(f"{out_path} exists, skip!")
+        return out_path
+
+    target_path = os.path.join(output_dir, 'patches', f'{name}_patches.h5')
+    attrs, coords = read_coords(target_path)
+
+    n = int(np.sqrt(num_n))
+    patch_size_level0 = attrs['patch_size_level0']
+    patch_size_level0_neighbor = patch_size_level0 * n
+
+    center = coords + patch_size_level0 / 2
+    top_left_neighbor = np.round(center - patch_size_level0_neighbor / 2).astype(np.int64)
+
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    coords_to_h5(
+        top_left_neighbor, out_path, patch_size * n,
+        attrs['level0_magnification'], attrs['target_magnification'],
+        output_dir, attrs['level0_width'], attrs['level0_height'], name, overlap=0,
+    )
+    return out_path
+
+
 def _write_ids_from_patch_dir(output_dir, meta_dir=None, sample_ids=None):
     """Write ids.csv from patch filenames.
 
-    Shared by 'inference' mode (patches already extracted by some other
-    means — pass sample_ids=None to scan output_dir/patches/*.h5 for
-    everything present, since that whole directory IS the target) and
-    'wsi_only' mode (patches just extracted by extract_patches_from_wsi/
-    extract_patches_from_coords_file, above). For 'wsi_only', the caller
+    Shared by mode='inference' with extract_from_wsi=False (patches already
+    extracted by some other means — pass sample_ids=None to scan
+    output_dir/patches/*.h5 for everything present, since that whole
+    directory IS the target) and mode='inference' with extract_from_wsi=True
+    (patches just extracted by extract_patches_from_wsi/
+    extract_patches_from_coords_file, above). For the latter, the caller
     MUST pass the explicit sample_ids this call actually processed —
     output_dir/patches/ is commonly reused across separate predict() calls
     on different slides, so scanning the whole directory would silently
@@ -569,7 +608,8 @@ if __name__ == "__main__":
     parser.add_argument("--meta_dir", type=str, default=None)
     parser.add_argument("--platform", type=str, default='visium')
     parser.add_argument("--prefix", type=str, default='')
-    parser.add_argument("--mode", type=str, default='raw', choices=['raw', 'stpbench', 'inference', 'wsi_only'])
+    parser.add_argument("--mode", type=str, default='raw', choices=['raw', 'stpbench', 'inference'])
+    parser.add_argument("--extract_from_wsi", action='store_true', default=False)
     parser.add_argument("--overwrite", action='store_true', default=False)
     parser.add_argument("--slide_level", type=int, default=0)
     parser.add_argument("--slide_ext", type=str, default='.svs')
@@ -643,16 +683,18 @@ if __name__ == "__main__":
             adata = _read_hest_adata(name, input_dir)
             preprocess_st(name, adata, output_dir)
 
-    elif mode == 'inference':
+    elif mode == 'inference' and not args.extract_from_wsi:
         # Patches already exist under input_dir (that's the whole premise
-        # of 'inference' mode — nothing gets extracted here). output_dir
-        # is a separate, writable location for the refreshed ids.csv (and
-        # any later feature extraction) — it may not contain the patches
-        # at all, e.g. when input_dir is a shared/read-only asset dir.
+        # of this case — nothing gets extracted here). output_dir is a
+        # separate, writable location for the refreshed ids.csv (and any
+        # later feature extraction) — it may not contain the patches at
+        # all, e.g. when input_dir is a shared/read-only asset dir.
         _write_ids_from_patch_dir(input_dir, meta_dir=meta_dir)
 
-    elif mode == 'wsi_only':
+    elif mode == 'inference' and args.extract_from_wsi:
         os.makedirs(f"{output_dir}/patches", exist_ok=True)
+        if args.save_neighbors:
+            os.makedirs(f"{output_dir}/patches/neighbor", exist_ok=True)
 
         if os.path.isfile(input_dir) or input_dir.lower().endswith(_WSI_EXTENSIONS):
             wsi_paths = [input_dir]
@@ -688,7 +730,17 @@ if __name__ == "__main__":
                     patch_size=args.patch_size,
                     overwrite=args.overwrite,
                 )
-            sample_ids.append(os.path.splitext(os.path.basename(out_path))[0].replace('_patches', ''))
+            name = os.path.splitext(os.path.basename(out_path))[0].replace('_patches', '')
+            sample_ids.append(name)
+
+            if args.save_neighbors:
+                extract_neighbor_patches_from_wsi(
+                    wsi_path, output_dir, name,
+                    dst_pixel_size=dst_pixel_size,
+                    patch_size=args.patch_size,
+                    num_n=args.num_n,
+                    overwrite=args.overwrite,
+                )
 
         _write_ids_from_patch_dir(output_dir, meta_dir=meta_dir, sample_ids=sample_ids)
 

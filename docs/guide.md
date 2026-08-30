@@ -498,14 +498,16 @@ never looks at `preprocess.mode` again. Once your own raw data has been
 ingested with `mode: raw`, leave it set to `raw` — there's nothing to change
 afterward.
 
-Two more `preprocess.mode` values exist but aren't meant to be hand-written in
-a data config: `inference` (already-extracted assets, no ST/expression data —
-this is what a WSI-path `predict()`'s already-preprocessed-asset-dir form
-uses internally) and `wsi_only` (extract patches from a bare WSI with no
-companion ST data at all — what a WSI-path `predict()` uses internally for a
-single slide file or directory of slides). See
+One more `preprocess.mode` value exists but isn't meant to be hand-written in
+a data config: `inference` (no ST/expression data — this is what a WSI-path
+`predict()` uses internally). It has two sub-cases controlled by
+`preprocess.extract_from_wsi`: `False` (the default) reuses patches that
+already exist under an already-preprocessed asset directory, while `True`
+extracts patches fresh from a bare WSI with no companion ST data at all —
+tissue segmentation and tiling for a single slide file or directory of
+slides. See
 [Easy Inference Directly on a WSI](#easy-inference-directly-on-a-wsi) for the
-`predict()`-level interface to both; you won't normally write either mode by
+`predict()`-level interface to both; you won't normally write either by
 hand.
 
 ### Dry-run check before preprocessing

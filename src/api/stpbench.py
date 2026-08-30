@@ -1385,8 +1385,8 @@ class STPred:
                 summary["preprocess_external"] = self.preprocess(external_data, **ext_kwargs)
                 # preprocess_external above may have overwritten
                 # state["internal_data"] with `external_data` (its
-                # state-write heuristic treats any non-inference/wsi_only
-                # mode as "internal", which is wrong here) — pin train_data
+                # state-write heuristic treats any non-inference mode as
+                # "internal", which is wrong here) — pin train_data
                 # explicitly instead of letting predict()/evaluate() fall
                 # back to state.
                 summary["predict_external"] = self.predict(external_data, train_data=internal_data)
@@ -1469,7 +1469,7 @@ class STPred:
                 ):
                     _run_command(task["command"], cwd=task.get("cwd"), log_path=task.get("log_path"))
 
-            if plan["base_config"].get("mode") in ("inference", "wsi_only"):
+            if plan["base_config"].get("mode") == "inference":
                 self.state["external_data"] = data
             else:
                 self.state["internal_data"] = data
@@ -2196,11 +2196,15 @@ class STPred:
         # embedding reads at predict time agree with wherever extraction
         # actually wrote embeddings); for asset_dir, output_dir/patches is
         # symlinked to the real (possibly read-only) patches below instead
-        # of physically extracting them (mode='inference', vs 'wsi_only'
-        # which extracts for real).
+        # of physically extracting them. Both kinds are mode='inference'
+        # (no ST companion data) — extract_from_wsi is the sub-flag that
+        # tells DataPipeline whether to actually run tissue segmentation +
+        # tiling (wsi_file/wsi_dir) or just reuse patches that already
+        # exist (asset_dir).
         preprocess_input_dir = data
         preprocess_output_dir = preprocess_meta_dir = data_dir = meta_dir = output_dir
-        mode = "inference" if kind == "asset_dir" else "wsi_only"
+        mode = "inference"
+        extract_from_wsi = kind != "asset_dir"
 
         if kind == "asset_dir":
             os.makedirs(output_dir, exist_ok=True)
@@ -2228,6 +2232,7 @@ class STPred:
             config["DATA"]["wsi_dir"] = resolved_wsi_dir
         config["preprocess"].update({
             "mode": mode,
+            "extract_from_wsi": extract_from_wsi,
             "input_dir": preprocess_input_dir,
             "output_dir": preprocess_output_dir,
             "meta_dir": preprocess_meta_dir,

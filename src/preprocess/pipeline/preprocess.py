@@ -36,7 +36,8 @@ def preprocess_data(
     num_n: int = 5,
     dst_pixel_size: float = 0.5,
     overwrite: bool = False,
-    coords_path: Optional[str] = None
+    coords_path: Optional[str] = None,
+    extract_from_wsi: bool = False
 ) -> None:
     """
     Run data preprocessing
@@ -55,7 +56,11 @@ def preprocess_data(
         overwrite: Whether to force re-extraction of already-processed patches
         coords_path: Path to an .h5ad/.csv of patch-center coordinates —
             crops patches at these locations instead of running tissue
-            segmentation ('wsi_only' mode, single WSI file only)
+            segmentation (mode='inference' with extract_from_wsi=True,
+            single WSI file only)
+        extract_from_wsi: For mode='inference': extract patches fresh from
+            a raw WSI (tissue segmentation + tiling, or coords_path-based
+            cropping) instead of reusing patches that already exist on disk
     """
     cmd = [
         sys.executable, _repo_script("src/preprocess/prepare_data.py"),
@@ -81,6 +86,8 @@ def preprocess_data(
         cmd.append("--overwrite")
     if coords_path is not None:
         cmd.extend(["--coords_path", coords_path])
+    if extract_from_wsi:
+        cmd.append("--extract_from_wsi")
 
     return_code, output = run_command(cmd, cwd=str(REPO_ROOT))
 

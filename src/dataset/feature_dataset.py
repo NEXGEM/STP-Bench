@@ -64,6 +64,9 @@ class H5TileDataset(Dataset):
             if feature_type == 'neighbor':
                 self.patcher = self._get_patcher(h5_path, n=self.n)
             elif mode == 'inference':
+                # No companion ST data, so the patch h5 may be coords-only
+                # (no embedded 'img') -- a real patcher is needed to re-crop
+                # pixels from the WSI.
                 self.patcher = self._get_patcher(h5_path)
             else:
                 self.patcher = None
