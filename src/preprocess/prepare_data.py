@@ -315,9 +315,20 @@ def _segment_tissue_safe(st):
     handle the out-of-boundary cases`. Otsu thresholding works from a
     downsampled thumbnail instead of full-res tiles, so it doesn't hit
     this path at all.
+
+    Separately, trident's CuCIMWSI.segment_tissue() calls self.close()
+    once segmentation finishes (trident's own pipeline always reopens the
+    WSI fresh for each stage), which sets wsi.img = None. HESTData reuses
+    the same wsi object for dump_patches() right after segmentation, so
+    that later read crashes with `AttributeError: 'NoneType' object has
+    no attribute 'read_region'` unless the handle is reopened here first.
+    close() also resets _initialized, so _lazy_initialize() cleanly
+    reopens it; it's a no-op for backends (e.g. OpenSlideWSI) that don't
+    close on segment_tissue().
     """
     try:
         st.segment_tissue(method='deep')
+        st.wsi._lazy_initialize()
     except ValueError as exc:
         if 'out-of-boundary' not in str(exc):
             raise
