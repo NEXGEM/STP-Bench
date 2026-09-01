@@ -25,9 +25,9 @@ outside that comparison axis — see
 
 ## Updates
 
-- **2026-08-22** — Added **AsymST** as a new DenseNet-121 + UNI2-h fusion model.
+- **2026-08-22** — Added **[AsymST](src/model/AsymST)** as a new DenseNet-121 + UNI2-h fusion model.
 - **2026-08-21** — Added **downstream analyses** (`stp.downstream(...)`): gene-set enrichment, cell-type deconvolution, and spatial-domain identification on top of predicted ST — see [Downstream Analyses](#downstream-analyses).
-- **2026-07-17** — Added **DeepSpotM** as a new zero-shot pretrained model.
+- **2026-07-17** — Added **[DeepSpotM](src/model/deepspotm)** as a new zero-shot pretrained model.
 - **2026-05-28** — Initial release.
 
 ## Installation
@@ -142,29 +142,28 @@ project. Use the pinned requirements above instead.
 Preprocessed benchmark data (patches, ST expression, embeddings, metadata) is
 hosted on Hugging Face at [`nexgem/STP-Bench`](https://huggingface.co/datasets/nexgem/STP-Bench).
 
-```python
-from huggingface_hub import snapshot_download
-
-local_dir = snapshot_download(
-    repo_id="nexgem/STP-Bench",
-    repo_type="dataset",
-    local_dir="/path/to/stp_bench",
-)
-```
-
-Set the downloaded directory as `DATA.data_dir` (and `preprocess.output_dir`) in
-your data config.
-
-<details>
-<summary><strong>Data download and layout details</strong> (CLI download, directory structure)</summary>
-
-#### Download via CLI
+**Total size: ~444 GB** for the full dataset — `scripts/download_data.py` lets
+you pull just the dataset(s) or sample(s) you need instead:
 
 ```bash
-huggingface-cli download nexgem/STP-Bench \
-    --repo-type dataset \
-    --local-dir /path/to/stp_bench
+# Full dataset (~444 GB)
+python scripts/download_data.py --local_dir /path/to/stp_bench
+
+# One or more datasets (namespace/name, matches config/data/<namespace>/<name>.yaml)
+python scripts/download_data.py --local_dir /path/to/stp_bench --dataset ncche/xenium
+
+# One or more individual samples
+python scripts/download_data.py --local_dir /path/to/stp_bench --sample Xenium_LUAD_No14 --sample Xenium_TSU-21
+
+# --dataset and --sample can be combined and repeated freely
 ```
+
+`--dataset` reads that dataset's own `ids.csv` to resolve which samples to fetch.
+
+Set the downloaded directory as `DATA.data_dir` (and `preprocess.output_dir`) in your data config.
+
+<details>
+<summary><strong>Data download and layout details</strong> (directory structure)</summary>
 
 #### Use as `data_dir`
 
@@ -251,6 +250,9 @@ constructor options — see
 `STPred` uses exact-name YAML files under `config/data/` and `config/model/`.
 A data config must define at minimum:
 
+<details>
+<summary><strong>An example config</strong></summary>
+
 ```yaml
 GENERAL:
   seed: 2021
@@ -280,30 +282,25 @@ preprocess:
   input_dir: /path/to/raw_data
   output_dir: /path/to/processed_data
 ```
+</details>
 
-`DATA.model_name` selects the **patch encoder** used to pre-extract patch
-embeddings — a choice that's independent of, and swappable separately from,
-each model's own downstream architecture (`config/model/<Model>.yaml`).
-Leave it at the default, `uni_v2`, unless you have a specific reason to
-change it: every model that consumes pre-extracted embeddings
-(`feature_type: global/neighbor/target/all`) is benchmarked against the
-*same* encoder, which is what makes their scores comparable as an
-architecture comparison in the first place — changing it for only some
-models would conflate "better architecture" with "better patch encoder."
-A minority of models bypass this shared encoder entirely, either because
-they build their own image encoder into the model class (`feature_type:
-none`, e.g. a custom CNN/ViT backbone) or because they're zero-shot
-foundation models with a fixed pretrained backbone (e.g. DeepSpotM). Those
-aren't on the same comparison axis and shouldn't be read as "architecture X
-beats architecture Y" against `uni_v2`-encoder models — see
-[docs/guide.md — Adding a New Model](docs/guide.md#adding-a-new-model) for
-how a new model's config should flag which category it falls into.
+`DATA.model_name` picks the shared **patch encoder** (default `uni_v2`) used
+to pre-extract patch embeddings, independent of each model's own downstream
+architecture (`config/model/<Model>.yaml`). Keep it at the default — every
+model consuming pre-extracted embeddings (`feature_type: global/neighbor/
+target/all`) is benchmarked against the same encoder, so score differences
+reflect architecture rather than encoder choice; changing it per-model would
+conflate the two. A minority of models bypass this shared encoder — a custom
+image encoder baked into the model (`feature_type: none`) or a zero-shot
+pretrained backbone (e.g. DeepSpotM) — and aren't on the same comparison
+axis; see [docs/guide.md — Adding a New Model](docs/guide.md#adding-a-new-model)
+for how a new model's config should flag its category.
 
-Use `STPred.init_data_config("my_data")` to generate an editable template.
-All relative paths in configs (`meta_dir`, `log_path`, `output_dir`) are
-resolved relative to the `repo_root` passed to `STPred(...)` — see
+Use `STPred.init_data_config("my_data")` for an editable template. Relative
+paths (`meta_dir`, `log_path`, `output_dir`) resolve against the `repo_root`
+passed to `STPred(...)` — see
 [docs/guide.md — Creating an STPred Instance](docs/guide.md#creating-an-stpred-instance)
-for that and every other constructor parameter.
+for that and other constructor parameters.
 
 ## Outputs
 
