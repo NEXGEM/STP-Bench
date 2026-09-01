@@ -25,9 +25,9 @@ outside that comparison axis — see
 
 ## Updates
 
-- **2026-08-22** — Added **[AsymST](src/model/AsymST)** as a new DenseNet-121 + UNI2-h fusion model.
+- **2026-08-22** — Added **[AsymST](https://www.nature.com/articles/s41598-026-63426-x)** as a new DenseNet-121 + UNI2-h fusion model.
 - **2026-08-21** — Added **downstream analyses** (`stp.downstream(...)`): gene-set enrichment, cell-type deconvolution, and spatial-domain identification on top of predicted ST — see [Downstream Analyses](#downstream-analyses).
-- **2026-07-17** — Added **[DeepSpotM](src/model/deepspotm)** as a new zero-shot pretrained model.
+- **2026-07-17** — Added **[DeepSpotM](https://www.medrxiv.org/content/10.64898/2026.06.19.26356060v1)** as a new zero-shot pretrained model.
 - **2026-05-28** — Initial release.
 
 ## Installation
