@@ -1,0 +1,24 @@
+MODEL:
+  model_name: TRIPLEX.TRIPLEX
+  emb_dim: 1536
+  depth1: 1
+  depth2: 2
+  depth3: 1
+  num_heads1: 8
+  num_heads2: 8
+  num_heads3: 8
+  mlp_ratio1: 2
+  mlp_ratio2: 2
+  mlp_ratio3: 2
+  dropout1: 0.15
+  kernel_size: 3
+  pos_layer: spatialformer
+  adapter: triplex
+DATA:
+  dataset_name: TriDataset
+  # dataset_name: CombineDataset
+  feature_type:
+    - global
+    - neighbor
+preprocess:
+  save_neighbor_imgs: true

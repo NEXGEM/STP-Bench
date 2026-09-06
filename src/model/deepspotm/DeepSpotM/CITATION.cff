@@ -1,0 +1,40 @@
+cff-version: 1.2.0
+message: "If you use DeepSpot-M, please cite the following."
+title: "DeepSpot-M: a multimodal foundation model for transcriptome-wide virtual spatial transcriptomics from histology"
+authors:
+  - family-names: Nonchev
+    given-names: Kalin
+    affiliation: "ETH Zurich"
+    email: kalin.nonchev@inf.ethz.ch
+  - family-names: Dawo
+    given-names: Sebastian
+    affiliation: "ETH Zurich"
+  - family-names: Silina
+    given-names: Karina
+    affiliation: "ETH Zurich"
+  - family-names: Koelzer
+    given-names: Viktor Hendrik
+    affiliation: "University of Zurich and University of Basel"
+  - family-names: Rätsch
+    given-names: Gunnar
+    affiliation: "ETH Zurich"
+year: 2026
+url: "https://github.com/ratschlab/DeepSpotM"
+license: "CC-BY-NC-SA-4.0"
+preferred-citation:
+  type: article
+  title: "DeepSpot-M: a multimodal foundation model for transcriptome-wide virtual spatial transcriptomics from histology"
+  authors:
+    - family-names: Nonchev
+      given-names: Kalin
+    - family-names: Dawo
+      given-names: Sebastian
+    - family-names: Silina
+      given-names: Karina
+    - family-names: Koelzer
+      given-names: Viktor Hendrik
+    - family-names: Rätsch
+      given-names: Gunnar
+  journal: "medRxiv"
+  year: 2026
+  publisher: "Cold Spring Harbor Laboratory Press"

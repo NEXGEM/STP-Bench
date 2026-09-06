@@ -1,0 +1,38 @@
+GENERAL:
+  seed: 2021
+  log_path: ./logs
+TRAINING:
+  num_k: 4
+  learning_rate: 0.0001
+  num_epochs: 200
+  monitor: PearsonCorrCoef
+  mode: max
+  early_stopping:
+    patience: 20
+  lr_scheduler:
+    patience: 5
+    factor: 0.1
+DATA:
+  data_dir: /path/to/stp_bench_data
+  meta_dir: input/hest/BRCA
+  output_dir: output/pred
+  gene_type: hmhvg
+  num_genes: 200
+  num_outputs: 200
+  train_dataloader:
+    batch_size: 128
+    num_workers: 4
+    pin_memory: false
+    shuffle: true
+  test_dataloader:
+    batch_size: 1
+    num_workers: 4
+    pin_memory: false
+    shuffle: false
+preprocess:
+  mode: stpbench
+  platform: visium
+  meta_dir: input/hest/BRCA
+  input_dir: /path/to/stp_bench_data
+  output_dir: /path/to/stp_bench_data
+  overwrite: false

@@ -1,0 +1,23 @@
+MODEL:
+  model_name: sepal.Sepal
+  act: ReLU
+  graph_operator: GCNConv
+  h_preprocess: 3072,512
+  h_graph: 512,256,128
+  h_pred_head: 128,256
+  pooling: SAGPooling
+  sum_positions: false
+  adapter: sepal
+  training_pipeline:
+    kind: sepal_two_stage
+    localnet_model: LinearProb
+    local_model: LinearProb
+    use_pretrained_emb: true
+DATA:
+  dataset_name: SepalDataset
+  datamodule_policy: direct
+  # Must match MODEL.training_pipeline.local_model / use_pretrained_emb above —
+  # SepalDataset derives the on-disk graph_dir name from these, and it must
+  # agree with src/model/sepal/preprocess.py's identical derivation.
+  local_model: LinearProb
+  use_pretrained_emb: true

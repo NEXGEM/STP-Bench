@@ -1,0 +1,11 @@
+MODEL:
+  model_name: brstnet.BrSTNet
+  backbone: efficientnet_b4
+  pretrained: false
+  aux_weight: 1.0
+  finetuning: null
+  use_pretrained_emb: true
+  image_embedding_dim: 1536
+  adapter: default
+DATA:
+  dataset_name: BrSTNetDataset

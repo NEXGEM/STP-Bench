@@ -1,0 +1,16 @@
+TRAINING:
+  mode: max
+  save_best_only: true
+MODEL:
+  model_name: stem.Stem
+  hidden_size: 768
+  depth: 4
+  num_heads: 16
+  mlp_ratio: 4.0
+  label_size: 1536
+  learn_sigma: true
+  adapter: stem
+DATA:
+  dataset_name: StemDataset
+  train_dataloader:
+    batch_size: 8

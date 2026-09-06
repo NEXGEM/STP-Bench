@@ -1,0 +1,7 @@
+MODEL:
+  model_name: st_net.StNet
+  adapter: default
+DATA:
+  dataset_name: STDataset
+  feature_type: none
+  use_emb: false

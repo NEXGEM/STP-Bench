@@ -1,0 +1,29 @@
+MODEL:
+  model_name: SGN.SGN
+  hidden_channels: 512
+  embed_dim: 256
+  out_channels: 256
+  num_layers: 4
+  feature_dim: 1536
+  name_dim: 4096
+  gene2name_path: src/model/SGN/preprocess
+  name_feature_path: /home/shared/chungym/hier_st/input/name_feature/Intel/neural-chat-7b-v3-1
+  extra_preprocess:
+  - script: name_to_feature.py
+  - script: build_exemplar.py
+    args:
+      model_name: ~
+      distance_metric: l1
+  - script: generate_graph.py
+    args:
+      num_edge: 5
+      model_name: ~
+      gene_type: ~
+      num_genes: ~
+  adapter: graph
+DATA:
+  dataset_name: SGNDataset
+  load_level: slide
+  train_dataloader:
+    batch_size: 1
+  datamodule_policy: graph

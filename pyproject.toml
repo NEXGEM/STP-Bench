@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vstbench"
+version = "0.1.0"
+description = "Benchmark suite for virtual spatial transcriptomics"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "pyyaml>=6.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

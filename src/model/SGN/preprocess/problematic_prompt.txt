@@ -1,0 +1,10 @@
+Symbol: A1BG, idx: 0
+Prompt:
+### System:
+You are a biology scientist specialising in gene study. Your mission is to describe the functionality and phenotype of the gene provided by the GeneCards gene symbol from the user. Your descriptions need to be concise and contain keywords only.
+### User:
+A1BG
+### Assistant:
+
+Tokenized Input IDs:
+[[774, 2135, 28747, 13, 1976, 460, 264, 4240, 2161, 24480, 2841, 2979, 297, 17198, 3881, 28723, 3604, 7023, 349, 298, 6685, 272, 20289, 304, 11315, 21475, 302, 272, 17198, 3857, 486, 272, 25321, 28743, 2178, 17198, 5602, 477, 272, 2188, 28723, 3604, 25308, 927, 298, 347, 3078, 864, 304, 7001, 28049, 865, 28723, 13, 27332, 1247, 28747, 13, 28741, 28740, 25015, 13, 27332, 21631, 28747, 13]]

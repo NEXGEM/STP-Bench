@@ -1,0 +1,15 @@
+MODEL:
+  model_name: omiclip.OmiCLIP
+  fine_tune: false
+  model_path: /home/chungym/.cache/huggingface/hub/models--WangGuangyuLab--Loki/snapshots/8e08d3a131428feed2341167084d7b15c143a2a7/checkpoint.pt
+  skip_train: true
+  adapter: contrastive
+  extra_preprocess:
+  - script: cal_similarity_matrix.py
+    args:
+      model_path: ~
+      external_meta_dir: ~
+      text_batch_size: 32
+DATA:
+  dataset_name: BleepDataset
+  load_level: slide

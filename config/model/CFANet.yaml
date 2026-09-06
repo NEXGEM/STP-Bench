@@ -1,0 +1,7 @@
+MODEL:
+  model_name: cfanet.CFANet
+  use_pretrained_emb: true
+  pretrained_emb_dim: 1536
+  adapter: default
+DATA:
+  dataset_name: STDataset

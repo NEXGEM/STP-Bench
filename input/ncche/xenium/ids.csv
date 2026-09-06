@@ -1,0 +1,17 @@
+sample_id,fold_0,fold_1,fold_2,fold_3,fold_4
+Xenium_LUAD_No14,test,train,train,train,train
+Xenium_LUAD_No16,test,train,train,train,train
+Xenium_LUAD_No17,train,train,test,train,train
+Xenium_LUAD_No2,train,train,train,train,test
+Xenium_LUAD_No3,train,train,train,test,train
+Xenium_TSU-21,test,train,train,train,train
+Xenium_TSU-23,train,train,train,train,test
+Xenium_TSU-24,train,train,train,test,train
+Xenium_TSU-25,train,test,train,train,train
+Xenium_TSU-27,train,train,test,train,train
+Xenium_TSU-28,train,train,train,test,train
+Xenium_TSU-30,train,test,train,train,train
+Xenium_TSU-33,train,train,train,train,test
+Xenium_TSU-35,train,test,train,train,train
+Xenium_TSU-36,test,train,train,train,train
+Xenium_TSU-41,train,train,test,train,train
