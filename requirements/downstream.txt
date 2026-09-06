@@ -21,3 +21,11 @@ louvain>=0.8.2
 # upstream), which breaks the import before louvain's clustering code ever
 # runs -- pin below that until louvain itself drops the pkg_resources import.
 setuptools<81
+# NOTE (unverified): installing this file into an env that already has
+# runtime.txt's leidenalg + python-igraph (used by gene_enrichment's own
+# clustering step) can trigger pip to downgrade python-igraph to satisfy
+# louvain's pin, which then conflicts with leidenalg's own
+# `igraph<2.0,>=1.0.0` requirement (a resolver warning, not necessarily a
+# runtime failure). Not confirmed whether gene_enrichment still works
+# correctly after installing this file in the same environment -- if you
+# hit this, verify gene_enrichment separately rather than assuming it's fine.

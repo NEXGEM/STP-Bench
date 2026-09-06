@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 import warnings
 from glob import glob
 from tqdm import tqdm
@@ -8,6 +9,7 @@ import argparse
 import numpy as np
 import pandas as pd
 import h5py
+import openslide
 from openslide import OpenSlide
 import scanpy as sc
 
@@ -21,6 +23,16 @@ MPP_TO_LEVEL = {
     2.0: 2,
     4.0: 3,
 }
+
+# _ensure_pyramidal_tifs() is invoked once per SAMPLE from _iter_hest()
+# (inside the main per-sample preprocessing loop), not once per dataset --
+# without this cache it re-scans and re-OpenSlide-opens every WSI in the
+# cohort on every single sample's turn, an O(N^2) cost that's pure
+# bookkeeping overhead before any real segmentation/patching work starts.
+# Scoped to one process's lifetime (this module is re-imported fresh in
+# each prepare_data.py subprocess invocation), so a later, separate
+# preprocessing run still re-checks from scratch if files changed.
+_PYRAMIDAL_TIFS_CHECKED: set = set()
 
 
 def _ensure_tif_aliases(hest_dir):
@@ -38,6 +50,205 @@ def _ensure_tif_aliases(hest_dir):
                 os.symlink(entry, tif_alias)
 
 
+def _read_mpp_um(hest_dir, sample_id):
+    """Best-effort pixel size (microns/pixel) for a sample from its HEST
+    metadata JSON, or None if unavailable/not a usable finite number."""
+    meta_path = os.path.join(hest_dir, 'metadata', f'{sample_id}.json')
+    if not os.path.isfile(meta_path):
+        return None
+    try:
+        with open(meta_path) as f:
+            meta = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+    for key in ('pixel_size_um_embedded', 'pixel_size_um_estimated'):
+        mpp = meta.get(key)
+        if isinstance(mpp, (int, float)) and mpp == mpp and mpp > 0:  # mpp == mpp excludes NaN
+            return float(mpp)
+    return None
+
+
+def _patch_tiff_resolution(path, mpp_um):
+    """Rewrite XResolution/YResolution/ResolutionUnit on every page of an
+    existing TIFF IN PLACE -- no re-encoding of pixel data. Safe because
+    these are fixed-size RATIONAL/SHORT tags: overwriting never changes
+    their on-disk storage size, so tifffile's TiffTag.overwrite() never
+    needs to relocate or grow the file. Verified empirically (bit-identical
+    pixel data, dimensions, and thumbnail before/after) before this was
+    wired in -- see the fix for the mpp-mismatch case below.
+
+    Requires all three tags present on a page before touching any of
+    them: XResolution/YResolution are meaningless without a paired
+    ResolutionUnit to interpret them against, and the TIFF spec's default
+    ResolutionUnit (2 = inch) if the tag is simply absent would silently
+    misread these pixels-per-CENTIMETER values as pixels-per-INCH -- a
+    ~2.54x error, not a fix. Skip that page rather than leave it
+    half-consistent; every real file this has been exercised against
+    carries all three tags together anyway."""
+    import tifffile
+    pixels_per_cm = 10000.0 / mpp_um
+    rational = (int(round(pixels_per_cm * 10000)), 10000)
+    with tifffile.TiffFile(path, mode='r+b') as tf:
+        for page in tf.pages:
+            tags = page.tags
+            if not all(name in tags for name in ('XResolution', 'YResolution', 'ResolutionUnit')):
+                continue
+            for name in ('XResolution', 'YResolution'):
+                tags[name].overwrite(rational)
+            tags['ResolutionUnit'].overwrite(3)  # RESUNIT.CENTIMETER
+
+
+def _ensure_pyramidal_tifs(hest_dir):
+    """Some HEST-format WSI downloads (e.g. straight off the STP-Bench HF
+    dataset) ship a plain, single-resolution TIFF that OpenSlide cannot
+    open at all (OpenSlideUnsupportedFormatError / OpenSlideError), even
+    though the file is a perfectly valid TIFF -- hest's own reader always
+    goes through OpenSlide. Detect this per-file and transparently
+    re-encode into a tiled, pyramidal TIFF via pyvips (already an
+    installed dependency of hest/trident, not a new requirement here).
+
+    Separately -- and this is the more common case in practice, not an
+    edge case -- a TIFF can open via OpenSlide just fine while still
+    carrying a bogus embedded resolution tag (a 72 DPI placeholder is a
+    common default stamped by export/conversion tools that were never told
+    the real scan resolution). hest's own reader never notices this, since
+    it reads mpp from the HEST metadata JSON instead of the TIFF tag -- but
+    any consumer that trusts the TIFF's own tag (e.g. trident's
+    OpenSlideWSI, used by predict()'s bare-WSI path) silently computes a
+    wildly wrong mpp/magnification from it. This function now checks and,
+    if needed, cheaply corrects that too, via _patch_tiff_resolution() --
+    no re-encode needed since the file already opens fine.
+
+    Idempotent, but not in a way that goes stale: a file already
+    pyramidal-re-encoded on a previous run is detected via its `.orig`
+    backup and not re-encoded again, but its resolution tag is still
+    re-checked against HEST metadata and corrected if it disagrees -- so a
+    bad tag written by an earlier version of this exact function (e.g.
+    before a bugfix here, or before metadata was read correctly) gets
+    fixed the next time this whole check actually runs, instead of being
+    permanently skipped just because a `.orig` backup already exists.
+    "The next time this whole check actually runs" is once per process,
+    not once per sample -- see _PYRAMIDAL_TIFS_CHECKED above."""
+    key = os.path.abspath(hest_dir)
+    if key in _PYRAMIDAL_TIFS_CHECKED:
+        return
+    _PYRAMIDAL_TIFS_CHECKED.add(key)
+
+    wsi_dir = os.path.join(hest_dir, 'wsis')
+    if not os.path.isdir(wsi_dir):
+        return
+
+    # Recover from a prior run killed mid-tiffsave(): `path` is either gone
+    # entirely (killed between the os.rename() and tiffsave() below) or
+    # sitting there truncated/corrupt (killed while tiffsave() was still
+    # writing it) -- either way `<path>.orig` still holds the real
+    # original. This has to be its own pass, scanning for *.orig
+    # specifically, BEFORE the main loop below -- that loop only iterates
+    # entries whose name ends in .tif/.tiff, so a sample stuck in the
+    # "nothing (valid) at `path` yet" state never appears in os.listdir()
+    # under that filter at all and would otherwise never be looked at
+    # again by either this function or anything downstream, on any future
+    # run: the corrupt file would sit there forever, failing every
+    # subsequent run with no path back to a working state.
+    for entry in os.listdir(wsi_dir):
+        if not entry.lower().endswith('.orig'):
+            continue
+        restored_path = os.path.join(wsi_dir, entry[:-len('.orig')])
+        needs_restore = not os.path.exists(restored_path)
+        if not needs_restore:
+            try:
+                OpenSlide(restored_path).close()
+            except openslide.OpenSlideError:
+                needs_restore = True  # present but truncated/corrupt
+        if needs_restore:
+            if os.path.exists(restored_path):
+                os.remove(restored_path)  # drop the corrupt partial file first
+            os.rename(os.path.join(wsi_dir, entry), restored_path)
+
+    for entry in os.listdir(wsi_dir):
+        if not entry.lower().endswith(('.tif', '.tiff')):
+            continue
+        path = os.path.join(wsi_dir, entry)
+        if os.path.islink(path):
+            continue  # e.g. the .tiff -> .tif alias from _ensure_tif_aliases
+        sample_id = os.path.splitext(entry)[0]
+        backup_path = path + '.orig'
+
+        if not os.path.exists(backup_path):
+            try:
+                OpenSlide(path).close()
+            except openslide.OpenSlideError:
+                import pyvips
+                warnings.warn(
+                    f"{entry} is not a pyramidal/tiled TIFF and OpenSlide cannot "
+                    "open it as-is -- re-encoding as a pyramidal TIFF via pyvips "
+                    "so preprocessing can proceed. This can take a while for large "
+                    f"slides. The original is kept at {os.path.basename(backup_path)}.",
+                    stacklevel=2,
+                )
+
+                # pyvips.tiffsave's xres/yres are pixels/mm regardless of
+                # the `resunit` output tag -- without this, the re-encoded
+                # TIFF carries no (or a default/garbage) resolution tag,
+                # and any consumer that reads resolution straight from the
+                # TIFF itself (e.g. trident's OpenSlideWSI, unlike hest's
+                # own reader which reads mpp from the HEST metadata JSON
+                # instead) ends up with an mpp off by ~1000x.
+                mpp = _read_mpp_um(hest_dir, sample_id)
+                tiffsave_kwargs = dict(tile=True, pyramid=True, compression='jpeg', Q=90, bigtiff=True)
+                if mpp:
+                    pixels_per_mm = 1000.0 / mpp
+                    tiffsave_kwargs.update(xres=pixels_per_mm, yres=pixels_per_mm, resunit='cm')
+                else:
+                    warnings.warn(
+                        f"No usable pixel size found in metadata/{sample_id}.json -- "
+                        f"the re-encoded {entry} will carry no resolution tag, which "
+                        "can make TIFF-tag-based mpp readers (e.g. trident) compute "
+                        "a wrong value.",
+                        stacklevel=2,
+                    )
+
+                os.rename(path, backup_path)
+                try:
+                    pyvips.Image.new_from_file(backup_path).tiffsave(path, **tiffsave_kwargs)
+                except Exception:
+                    # Don't leave the slide with neither a working original nor a
+                    # working conversion -- restore it and let the real error
+                    # surface from the OpenSlide read that follows.
+                    if os.path.exists(path):
+                        os.remove(path)
+                    os.rename(backup_path, path)
+                    raise
+                continue  # tiffsave already wrote the correct resolution above
+
+        # Either already-openslide-readable, or a pyramidal re-encode from
+        # some earlier run -- in both cases, verify the file's OWN embedded
+        # resolution actually agrees with HEST metadata (within 2%), and
+        # patch it in place (cheap, no re-encode) if not.
+        real_mpp = _read_mpp_um(hest_dir, sample_id)
+        if real_mpp is None:
+            continue  # nothing to compare against
+        try:
+            current = OpenSlide(path)
+            current_mpp = current.properties.get('openslide.mpp-x')
+            current.close()
+        except openslide.OpenSlideError:
+            continue  # unreadable for some other reason -- leave it, not this function's job
+        try:
+            if current_mpp is not None and abs(float(current_mpp) - real_mpp) / real_mpp < 0.02:
+                continue  # already correct
+        except (TypeError, ValueError):
+            pass
+        warnings.warn(
+            f"{entry}'s embedded resolution tag (mpp={current_mpp}) disagrees with "
+            f"HEST metadata (mpp={real_mpp:.4f}) -- patching XResolution/YResolution/"
+            "ResolutionUnit in place so TIFF-tag-based mpp readers (e.g. trident, "
+            "used by predict()'s bare-WSI path) compute the right value.",
+            stacklevel=2,
+        )
+        _patch_tiff_resolution(path, real_mpp)
+
+
 def _iter_hest(*args, **kwargs):
     try:
         from hest import iter_hest
@@ -53,6 +264,7 @@ def _iter_hest(*args, **kwargs):
         # branch). An empty dir makes it resolve to None instead of crashing.
         os.makedirs(os.path.join(hest_dir, 'tissue_seg'), exist_ok=True)
         _ensure_tif_aliases(hest_dir)
+        _ensure_pyramidal_tifs(hest_dir)
     return iter_hest(*args, **kwargs)
 
 
@@ -452,6 +664,57 @@ def discover_wsi_files(input_dir, wsi_ext=_WSI_EXTENSIONS):
     return paths
 
 
+def _load_wsi_with_correct_mpp(wsi_path):
+    """load_wsi(), but sidesteps trident's own TIFF-tag-based mpp detection
+    when a HEST metadata JSON is available for this exact file.
+
+    This is the bare-WSI counterpart to `_ensure_pyramidal_tifs()`'s
+    resolution-tag check above -- that one only runs for the `_iter_hest()`
+    (raw/stpbench) preprocessing path. `extract_patches_from_wsi()` and
+    `extract_patches_from_coords_file()` (predict()'s bare-WSI-file/asset-
+    dir path) call `trident.load_wsi()` directly instead, which reads mpp
+    straight from the TIFF's own tag via OpenSlide -- exactly the tag that
+    can carry a bogus placeholder (e.g. a 72 DPI export default) even on a
+    file that otherwise opens fine. If `wsi_path` sits under a HEST-layout
+    `wsis/` directory with a sibling `metadata/<sample>.json` (true for any
+    WSI drawn from an existing HEST-formatted/STP-Bench dataset -- the
+    common case for predict() targets), read the real mpp from there and
+    pass it straight to `load_wsi(mpp=...)`, bypassing the TIFF tag
+    entirely rather than trusting it.
+
+    Falls back to trident's own detection when no such metadata exists (a
+    genuinely standalone WSI with no HEST context) -- but re-raises its
+    "mpp is very low" failure with an actionable message instead of the
+    bare trident error, since there is no override parameter exposed at
+    the predict()/CLI level (yet) to work around it directly.
+    """
+    from trident import load_wsi
+
+    sample_id = os.path.splitext(os.path.basename(wsi_path))[0]
+    wsi_dir = os.path.dirname(wsi_path)
+    hest_dir = os.path.dirname(wsi_dir) if os.path.basename(wsi_dir) == 'wsis' else None
+    mpp = _read_mpp_um(hest_dir, sample_id) if hest_dir else None
+
+    if mpp:
+        return load_wsi(slide_path=wsi_path, lazy_init=False, mpp=mpp)
+
+    try:
+        return load_wsi(slide_path=wsi_path, lazy_init=False)
+    except RuntimeError as exc:
+        if "mpp is very low" in str(exc):
+            raise RuntimeError(
+                f"{exc}\n\nThis usually means {os.path.basename(wsi_path)}'s embedded "
+                "resolution tag is a placeholder (e.g. a 72 DPI export default), not the "
+                "real scan resolution -- OpenSlide/trident read mpp straight from that tag. "
+                "If this slide came from a HEST-formatted dataset, point at its path under "
+                "that dataset's own `wsis/` directory (with the matching `metadata/<sample>."
+                "json` alongside it) so the real mpp can be read from there instead. There is "
+                "currently no way to pass an explicit mpp override through predict()/"
+                "prepare_data.py directly."
+            ) from exc
+        raise
+
+
 def extract_patches_from_wsi(wsi_path, output_dir, name=None, dst_pixel_size=0.5,
                               patch_size=224, seg_model_name='hest', seg_target_mag=10,
                               device='cuda:0', overwrite=False):
@@ -468,10 +731,9 @@ def extract_patches_from_wsi(wsi_path, output_dir, name=None, dst_pixel_size=0.5
     downstream (feature extraction, model-specific extra_preprocess) needs to
     know this patch file came from a WSI-only source.
     """
-    from trident import load_wsi
     from trident.segmentation_models import segmentation_model_factory
 
-    wsi = load_wsi(slide_path=wsi_path, lazy_init=False)
+    wsi = _load_wsi_with_correct_mpp(wsi_path)
     name = name or wsi.name
     out_path = os.path.join(output_dir, 'patches', f'{name}_patches.h5')
     if os.path.isfile(out_path) and not overwrite:
@@ -525,10 +787,9 @@ def extract_patches_from_coords_file(wsi_path, output_dir, coords_path, name=Non
     level0_magnification/target_magnification/... attrs, via trident's own
     coords_to_h5), so nothing downstream needs to know the difference.
     """
-    from trident import load_wsi
     from trident.IO import coords_to_h5
 
-    wsi = load_wsi(slide_path=wsi_path, lazy_init=False)
+    wsi = _load_wsi_with_correct_mpp(wsi_path)
     name = name or wsi.name
     out_path = os.path.join(output_dir, 'patches', f'{name}_patches.h5')
     if os.path.isfile(out_path) and not overwrite:
@@ -675,24 +936,65 @@ if __name__ == "__main__":
         os.makedirs(manifest_dir, exist_ok=True)
         pd.DataFrame(sample_ids, columns=['sample_id']).to_csv(f"{manifest_dir}/ids.csv", index=False)
 
+        failed_samples = []
         for name in tqdm(sample_ids):
-            if level != 0:
-                os.makedirs(f"{output_dir}/patches/level{level}", exist_ok=True)
+            try:
+                # BUG FIX: this used to be gated behind `if level != 0:`,
+                # which means target-patch dumping NEVER ran for the
+                # standard dst_pixel_size=0.5 -> level=0 configuration used
+                # by every dataset config in this repo -- save_patches()
+                # already branches internally on level==0 (dump straight to
+                # output_dir/patches) vs level!=0 (dump to a secondary
+                # level{level} dir + match_to_target), so this outer gate
+                # served no purpose except silently skipping target-patch
+                # creation at level 0. A `mode: stpbench` dataset whose
+                # patches/*.h5 don't already exist from some other source
+                # (e.g. after deleting them to force regeneration) would
+                # get patches/ left completely empty with no error --
+                # feature extraction and any feature_type=none model would
+                # only fail much later, far from the actual cause.
+                if level != 0:
+                    os.makedirs(f"{output_dir}/patches/level{level}", exist_ok=True)
                 save_patches(name, input_dir, output_dir,
                              platform='hest',
                              dst_pixel_size=dst_pixel_size)
 
-            if args.save_neighbors:
-                os.makedirs(f"{output_dir}/patches/neighbor", exist_ok=True)
-                save_patches(name, input_dir, output_dir,
-                             platform='hest',
-                             save_targets=False,
-                             save_neighbors=True,
-                             num_n=args.num_n,
-                             save_neighbor_imgs=args.save_neighbor_imgs)
+                if args.save_neighbors:
+                    os.makedirs(f"{output_dir}/patches/neighbor", exist_ok=True)
+                    save_patches(name, input_dir, output_dir,
+                                 platform='hest',
+                                 save_targets=False,
+                                 save_neighbors=True,
+                                 num_n=args.num_n,
+                                 save_neighbor_imgs=args.save_neighbor_imgs)
 
-            adata = _read_hest_adata(name, input_dir)
-            preprocess_st(name, adata, output_dir)
+                adata = _read_hest_adata(name, input_dir)
+                preprocess_st(name, adata, output_dir)
+            except Exception as exc:
+                # A single bad sample (unreadable WSI, malformed ST file,
+                # ...) must not abort the whole batch -- mirrors the
+                # per-sample resilience save_patches() already has for
+                # non-hest platforms (see its own try/except around
+                # load_st()). But swallowing the exception here must not
+                # also swallow the FACT that it happened: this script's
+                # exit code is how preprocess_data() (src/preprocess/
+                # pipeline/preprocess.py) decides whether raw preprocessing
+                # actually succeeded -- continuing silently past every
+                # sample failing would let that check report success with
+                # patches/st never written for any of them, exactly the
+                # kind of "must not silently swallow raw-preprocessing
+                # failures" bug this same file was already fixed for
+                # elsewhere. Track failures and fail the whole run (after
+                # finishing every other sample) at the end instead.
+                print(f"Failed to preprocess {name}: {exc}. Skipping.")
+                failed_samples.append(name)
+                continue
+
+        if failed_samples:
+            raise RuntimeError(
+                f"Failed to preprocess {len(failed_samples)}/{len(sample_ids)} sample(s): "
+                + ", ".join(failed_samples)
+            )
 
     elif mode == 'inference' and not args.extract_from_wsi:
         # Patches already exist under input_dir (that's the whole premise

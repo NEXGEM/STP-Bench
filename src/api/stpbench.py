@@ -20,6 +20,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import yaml
 import pandas as pd
+import h5py
 
 from api.benchmark_logger import BenchmarkLogger
 from api.config_resolver import NamedConfig, data_config_exists, resolve_data_config, resolve_model_config
@@ -750,7 +751,35 @@ def _build_runtime_cfg(payload: Dict[str, Any]):
     if cfg.DATA.get("wsi_dir", None):
         cfg.DATA.wsi_dir = _abs_path(repo_root, cfg.DATA.wsi_dir)
 
-    log_dir_parent = os.path.join(cfg.GENERAL.log_path, train_data, cfg.MODEL.name)
+    # `log_dir_parent` (and the train_data_config YAML parse it needs) is
+    # only consulted by the "train"/"evaluate" branches below to find
+    # where checkpoints for `train_data` live -- "predict" resolves its
+    # checkpoint via ckpt_path/_resolve_predict_checkpoint() instead and
+    # never reads either. Skipping this for "predict" avoids parsing a
+    # whole extra YAML config (train_data_config, when it differs from
+    # data_config) on every payload/fold of what's often a hot,
+    # many-samples path (external/WSI predict), for a value that action
+    # never uses.
+    if action != "predict":
+        # The training run for `train_data` was written under *that
+        # dataset's own* GENERAL.log_path, which can differ from `cfg`'s
+        # (built from `payload["data"]`'s config -- e.g. external
+        # evaluation, where `data` is the eval target and `train_data` is
+        # a completely different dataset with its own log_path). Using
+        # cfg.GENERAL.log_path here would silently point at the wrong
+        # directory, find no checkpoint, and fall back to untrained
+        # default weights with no error -- resolve it from train_data's
+        # own config instead. For action='train' this is always the same
+        # file as payload["data_config"] (train_data defaults to data),
+        # so this is a no-op there.
+        if payload.get("train_data_config") and payload["train_data_config"] != payload.get("data_config"):
+            train_log_path = _abs_path(
+                repo_root, load_config(payload["train_data_config"]).GENERAL.get("log_path", "./logs")
+            )
+        else:
+            train_log_path = cfg.GENERAL.log_path
+
+        log_dir_parent = os.path.join(train_log_path, train_data, cfg.MODEL.name)
 
     if action == "train":
         # Honor a timestamp threaded in by _run_models (shared across all
@@ -1138,7 +1167,17 @@ def _run_single_downstream_action(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 class STPred:
-    """User-facing API for the STPBench multi-model benchmark."""
+    """User-facing API for the STPBench multi-model benchmark.
+
+    Not thread-safe: workflow methods read and mutate shared instance state
+    (`self.state`, `self.dry_run`, ...) with no locking. In particular,
+    `benchmark(dry_run=...)` temporarily flips `self.dry_run` for the
+    duration of the call and restores it afterward — a second thread
+    calling any method that consults `self.dry_run` on the SAME instance
+    while that call is in flight observes the temporary value instead of
+    its own. Use a separate `STPred` instance per thread/process for
+    concurrent work rather than sharing one.
+    """
 
     def __init__(
         self,
@@ -1223,13 +1262,24 @@ class STPred:
         cfg = resolve_model_config(name, repo_root=repo_root)
         data = cfg.config.get("DATA", {})
         model = cfg.config.get("MODEL", {})
+        feature_type = data.get("feature_type", "global")
+        # BUG FIX: this used to be data.get("model_name") -- but no model
+        # config in the repo actually sets DATA.model_name itself; the
+        # shared patch encoder is inherited from the DATA config at runtime
+        # (every other resolution site in this file does
+        # data_section.get("model_name", "uni_v2")), so this always
+        # returned None, even for the majority of models that do use the
+        # shared uni_v2 encoder by default. A model only has no patch
+        # encoder at all when feature_type is "none" (a custom/zero-shot
+        # image encoder baked into the model class itself).
+        patch_encoder = data.get("model_name", "uni_v2") if feature_type != "none" else None
         return {
             "name": cfg.name,
             "path": cfg.path,
             "model_name": model.get("model_name"),
             "dataset_name": data.get("dataset_name"),
-            "feature_type": data.get("feature_type", "global"),
-            "patch_encoder": data.get("model_name"),
+            "feature_type": feature_type,
+            "patch_encoder": patch_encoder,
         }
 
 
@@ -1367,6 +1417,24 @@ class STPred:
     def benchmark(self, internal_data: str, external_data: Optional[str] = None, **kwargs) -> BenchmarkResult:
         """Run preprocess, train, internal evaluation, and optional external prediction."""
 
+        # dry_run here must gate the WHOLE pipeline, not just preprocess():
+        # train()/evaluate()/predict() route through _run_models(), which
+        # only ever consults the instance-level self.dry_run flag (they take
+        # no per-call dry_run kwarg of their own) -- passing dry_run=True as
+        # a plain **kwargs entry would previously only short-circuit the
+        # preprocess() call above and then silently run real training/
+        # evaluation/prediction anyway. Temporarily flip the instance flag
+        # for the duration of this call so every sub-call's existing
+        # self.dry_run check does the right thing.
+        dry_run = kwargs.pop("dry_run", self.dry_run)
+        previous_dry_run = self.dry_run
+        self.dry_run = dry_run
+        try:
+            return self._benchmark_impl(internal_data, external_data, **kwargs)
+        finally:
+            self.dry_run = previous_dry_run
+
+    def _benchmark_impl(self, internal_data: str, external_data: Optional[str] = None, **kwargs) -> BenchmarkResult:
         with self.logger.section("benchmark", internal_data=internal_data, external_data=external_data):
             summary: Dict[str, Any] = {}
             summary["preprocess_internal"] = self.preprocess(internal_data, **kwargs)
@@ -1506,12 +1574,20 @@ class STPred:
         if mode not in ["int", "ext"]:
             raise ValueError("mode must be 'int' or 'ext'.")
         eval_data = data if mode == "int" else external_data
-        train_data = data if mode == "int" else (data or self.state.get("internal_data"))
         if eval_data is None:
             state_key = "internal_data" if mode == "int" else "external_data"
             eval_data = self.state.get(state_key)
         if eval_data is None:
             raise ValueError(f"{'data' if mode == 'int' else 'external_data'} must be provided for mode {mode!r}.")
+        # Internal evaluation trains and evaluates the SAME dataset, so
+        # train_data is just eval_data -- computing it as `data` (the raw,
+        # possibly-None argument) here instead of the now-resolved
+        # eval_data meant evaluate_internal()/evaluate(mode="int") with no
+        # `data` argument always raised below, even with
+        # state["internal_data"] set from a prior train() call -- directly
+        # contradicting the documented "data defaults to the last-trained
+        # dataset" behavior (README/guide.md notebook 2).
+        train_data = eval_data if mode == "int" else (data or self.state.get("internal_data"))
         if train_data is None:
             raise ValueError("internal training data must be known before evaluating external data.")
         if timestamps is None:
@@ -1632,6 +1708,25 @@ class STPred:
                     f"predict(data={data!r}) requires either ckpt_path or "
                     "train_data (or a prior train()/from_run() call) to resolve "
                     "a checkpoint."
+                )
+            if train_data is None:
+                # ckpt_path alone only tells predict() which checkpoint FILE
+                # to load -- for a WSI-only target (no real data config of
+                # its own), the gene panel/meta_dir context still has to
+                # come from the dataset the model was actually trained on.
+                # Without train_data, _run_models() would otherwise default
+                # train_data to this auto-generated WSI target itself,
+                # silently pointing gene-panel resolution at output_dir
+                # (which has no genes.json) instead of the real training
+                # run's meta_dir -- surfacing later as a confusing
+                # "<...>genes.json is not found" error far from the cause.
+                raise ValueError(
+                    f"predict(data={data!r}, ckpt_path=...) also needs "
+                    "train_data (or a prior train()/from_run() call on this "
+                    "instance) -- ckpt_path only identifies the checkpoint "
+                    "file; train_data is what resolves the trained gene "
+                    "panel. Pass train_data=\"<namespace>/<name>\" alongside "
+                    "ckpt_path."
                 )
             data = self._materialize_wsi_data_config(
                 data, kind, output_dir, wsi_dir=wsi_dir, overwrite=overwrite,
@@ -2013,25 +2108,29 @@ class STPred:
         model_cfgs = self._resolve_models()
         model_reports = []
         missing_paths = []
+        mismatches = []
 
         for model_cfg in model_cfgs:
             runtime_cfg = self._merged_runtime_config(data_cfg, model_cfg)
             report = self._check_runtime_artifacts(data_cfg, model_cfg, runtime_cfg, mode=mode)
             missing_paths.extend(report["missing"])
+            mismatches.extend(report.get("mismatches", []))
             model_reports.append(report)
 
         result = {
-            "ok": not missing_paths,
+            "ok": not missing_paths and not mismatches,
             "data": data_cfg.name,
             "models": [model_cfg.name for model_cfg in model_cfgs],
             "mode": mode,
             "reports": model_reports,
             "missing": missing_paths,
+            "mismatches": mismatches,
         }
-        if strict and missing_paths:
+        if strict and (missing_paths or mismatches):
+            lines = [f"- {path}" for path in missing_paths] + [f"- {m}" for m in mismatches]
             raise FileNotFoundError(
-                "STPred preflight check failed. Missing required paths:\n"
-                + "\n".join(f"- {path}" for path in missing_paths)
+                "STPred preflight check failed. Missing required paths and/or "
+                "patch/embedding mismatches:\n" + "\n".join(lines)
             )
         return result
 
@@ -2646,18 +2745,40 @@ class STPred:
                     required.append(os.path.join(data_dir, "splits", f"train_{fold}.csv"))
                     required.append(os.path.join(data_dir, "splits", f"test_{fold}.csv"))
 
+        mismatches = []
         ids = self._read_sample_ids(meta_dir)
         if ids:
             sample_ids = ids[: min(3, len(ids))]
             for sample_id in sample_ids:
-                required.append(self._first_existing_candidate([
+                patch_path = self._first_existing_candidate([
                     os.path.join(asset_dir, "patches", f"{sample_id}.h5"),
                     os.path.join(asset_dir, "patches", f"{sample_id}_patches.h5"),
-                ]))
+                ])
+                required.append(patch_path)
+                patch_rows = self._h5_row_count(patch_path, ("coords",))
                 for feature in features:
-                    required.append(
-                        os.path.join(asset_dir, "emb", feature, f"features_{model_name}", f"{sample_id}.h5")
-                    )
+                    emb_path = os.path.join(asset_dir, "emb", feature, f"features_{model_name}", f"{sample_id}.h5")
+                    required.append(emb_path)
+                    # Preprocessing's own "already exists, skip" checks only
+                    # test file presence, never row-count agreement -- so a
+                    # partial re-preprocessing (segmentation isn't perfectly
+                    # deterministic across runs) can silently leave patches
+                    # and their already-extracted embeddings disagreeing on
+                    # spot count. That desync then only surfaces much later,
+                    # as an opaque tensor-size mismatch deep in train()/
+                    # evaluate() -- catch it here instead, where it's next to
+                    # the paths that actually disagree.
+                    if patch_rows is not None and os.path.exists(emb_path):
+                        emb_rows = self._h5_row_count(emb_path, ("features", "coords"))
+                        if emb_rows is not None and emb_rows != patch_rows:
+                            mismatches.append(
+                                f"{patch_path} has {patch_rows} spots but {emb_path} "
+                                f"(feature_type={feature!r}) has {emb_rows} — the embedding "
+                                "was likely extracted from a different (e.g. since "
+                                "re-preprocessed) version of this sample's patches. "
+                                "Delete the stale embedding file and re-run preprocess() "
+                                "to regenerate it."
+                            )
 
         for spec in self._model_extra_preprocess_specs(model_section):
             artifact_dir = spec.get("artifact_dir")
@@ -2674,7 +2795,21 @@ class STPred:
             },
             "checked": required,
             "missing": missing,
+            "mismatches": mismatches,
         }
+
+    @staticmethod
+    def _h5_row_count(path: str, candidate_keys: Sequence[str]) -> Optional[int]:
+        if not path or not os.path.isfile(path):
+            return None
+        try:
+            with h5py.File(path, "r") as f:
+                for key in candidate_keys:
+                    if key in f:
+                        return f[key].shape[0]
+        except (OSError, KeyError):
+            return None
+        return None
 
     def _read_sample_ids(self, meta_dir: str) -> List[str]:
         ids_path = os.path.join(meta_dir, "ids.csv")
@@ -2918,7 +3053,18 @@ class STPred:
         return summary
 
     def _default_ckpt_root(self, data: str, model: str) -> str:
-        return os.path.join(self.repo_root, "logs", data, model)
+        """Root directory training checkpoints for (data, model) live under.
+
+        Must resolve `data`'s own GENERAL.log_path (default './logs'), not
+        hardcode the repo-root default -- a data config with a custom
+        log_path (e.g. an isolated/external log location) would otherwise
+        silently look in the wrong place, find nothing, and predict()/
+        from_run() would proceed with no checkpoint / a fresh empty
+        timestamp instead of raising.
+        """
+        data_cfg = self._resolve_data(data)
+        log_path = data_cfg.config.get("GENERAL", {}).get("log_path", "./logs")
+        return os.path.join(_abs_path(self.repo_root, log_path), data, model)
 
     def _build_sepal_train_payload(
         self,

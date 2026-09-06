@@ -17,7 +17,7 @@ TRAINING:
   every_n_epochs: 1
 DATA:
   data_dir: /path/to/stp_bench_data
-  meta_dir: input/massey/tnbc
+  meta_dir: input/massey/TNBC
   output_dir: output/pred
   gene_type: hmhvg
   num_genes: 200
@@ -42,7 +42,7 @@ DATA:
 preprocess:
   mode: stpbench
   platform: visium
-  meta_dir: input/massey/tnbc
+  meta_dir: input/massey/TNBC
   input_dir: /path/to/stp_bench_data
   output_dir: /path/to/stp_bench_data
   overwrite: false

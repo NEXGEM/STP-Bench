@@ -145,36 +145,36 @@ class DataPipeline:
             print(f"Processed data already found at {self.output_dir}. Skipping raw preprocessing.")
         else:
             save_neighbors = _wants_feature(self.config['feature_type'], 'neighbor')
-            ok = preprocess_data(
-                input_dir=self.input_dir,
-                output_dir=self.asset_dir,
-                meta_dir=self.metadata_dir,
-                mode=mode,
-                platform=self.config['platform'],
-                slide_ext=self.config['slide_ext'],
-                patch_size=self.config['patch_size'],
-                slide_level=self.config['slide_level'],
-                save_neighbors=save_neighbors,
-                save_neighbor_imgs=self.config['save_neighbor_imgs'] if save_neighbors else False,
-                num_n=self.config['num_n'],
-                dst_pixel_size=self.config['dst_pixel_size'],
-                overwrite=self.config['overwrite'],
-                coords_path=self.config.get('coords_path'),
-                extract_from_wsi=self.config.get('extract_from_wsi', False),
-            )
             # preprocess_data() runs prepare_data.py as a subprocess and
-            # returns False (after printing the subprocess's output) on a
-            # nonzero exit code instead of raising -- a per-sample crash
-            # partway through (e.g. one bad WSI file) must not be silently
-            # treated as "raw preprocessing done", or every step downstream
+            # raises RuntimeError (with the subprocess's full output
+            # embedded) on a nonzero exit code -- a per-sample crash partway
+            # through (e.g. one bad WSI file) must not be silently treated
+            # as "raw preprocessing done", or every step downstream
             # (genesets/splits/feature extraction) proceeds against an
             # incomplete patch set and fails confusingly much later, far
             # from the actual cause.
-            if ok is False:
-                raise RuntimeError(
-                    f"Raw preprocessing failed for data_dir={self.asset_dir!r} (mode={mode!r}). "
-                    "See the subprocess output above for the actual error."
+            try:
+                preprocess_data(
+                    input_dir=self.input_dir,
+                    output_dir=self.asset_dir,
+                    meta_dir=self.metadata_dir,
+                    mode=mode,
+                    platform=self.config['platform'],
+                    slide_ext=self.config['slide_ext'],
+                    patch_size=self.config['patch_size'],
+                    slide_level=self.config['slide_level'],
+                    save_neighbors=save_neighbors,
+                    save_neighbor_imgs=self.config['save_neighbor_imgs'] if save_neighbors else False,
+                    num_n=self.config['num_n'],
+                    dst_pixel_size=self.config['dst_pixel_size'],
+                    overwrite=self.config['overwrite'],
+                    coords_path=self.config.get('coords_path'),
+                    extract_from_wsi=self.config.get('extract_from_wsi', False),
                 )
+            except RuntimeError as exc:
+                raise RuntimeError(
+                    f"Raw preprocessing failed for data_dir={self.asset_dir!r} (mode={mode!r}): {exc}"
+                ) from exc
 
 
     def align_st(self, sample_ids: list = None, overwrite: bool = False):
@@ -233,6 +233,26 @@ class DataPipeline:
         assert feature_type in ['global', 'neighbor', 'target', 'all'], \
             "feature_type must be 'global', 'neighbor', 'target' or 'all'"
 
+        self._reuse_existing_embeddings(
+            [f for f in ('global', 'neighbor', 'target') if _wants_feature(feature_type, f)]
+        )
+
+        # For an asset-dir predict() target (mode='inference',
+        # extract_from_wsi=False), neighbor patches live in the read-only
+        # SOURCE dir (patch_source_dir), not the writable asset_dir --
+        # every other case extracts (or already has) them under asset_dir
+        # itself. Computed once here, not duplicated per GPU-count branch
+        # below: `_drop_neighbor_imgs()` deletes 'img' from whatever this
+        # points at post-extraction, and having it be right in only one of
+        # two copies is exactly the kind of drift that caused this path to
+        # corrupt patches/*.h5 in the read-only asset dir in the first
+        # place (see _drop_neighbor_imgs's own read-only guard).
+        neighbor_patch_dataroot = (
+            f"{self.patch_source_dir}/patches/neighbor"
+            if self.config['mode'] == 'inference' and not self.config.get('extract_from_wsi')
+            else f"{self.asset_dir}/patches/neighbor"
+        )
+
         gpus = self.config['gpus']
         if self.total_gpus > 1:
             print(f"Running feature extraction in parallel on {self.total_gpus} GPUs...")
@@ -256,7 +276,7 @@ class DataPipeline:
                     mode=self.mode,
                 )
                 self._raise_if_extraction_failed(ok, "global")
-            neighbor_patch_dataroot = f"{self.patch_source_dir}/patches" if self.config['mode'] == 'inference' and not self.config.get('extract_from_wsi') else f"{self.asset_dir}/patches/neighbor"
+            # neighbor_patch_dataroot: computed once, above -- see there.
             if feature_type in ['neighbor', 'all']:
                 print("Extracting neighbor features...")
                 ok = extract_features_parallel(
@@ -318,7 +338,7 @@ class DataPipeline:
                     mode=self.mode,
                 )
                 self._raise_if_extraction_failed(ok, "global")
-            neighbor_patch_dataroot = f"{self.patch_source_dir}/patches" if self.config['mode'] == 'inference' and not self.config.get('extract_from_wsi') else f"{self.asset_dir}/patches/neighbor"
+            # neighbor_patch_dataroot: computed once, above -- see there.
             if feature_type in ['neighbor', 'all']:
                 print("Extracting neighbor features...")
                 ok = extract_features_single(
@@ -365,8 +385,88 @@ class DataPipeline:
         if not ok:
             raise RuntimeError(f"Feature extraction failed for feature_type={feature_type}.")
 
+    def _reuse_existing_embeddings(self, feature_types: list) -> None:
+        """Symlink already-extracted embeddings from an asset-dir predict()
+        target's own source directory into asset_dir before extraction
+        runs, so the "already exists, skip" check every extract_features_*
+        call already has finds and reuses them.
+
+        Only patches/ got this treatment before (via a directory-level
+        symlink in STPred._materialize_wsi_data_config) -- emb/ was never
+        checked at all, so a predict() call against an asset dir that
+        already had every embedding it needed still re-extracted all of
+        them from scratch, every single call. For a neighbor-feature model
+        on a real cohort that's hours of avoidable GPU time.
+
+        This links individual <sample>.h5 files rather than the whole emb/
+        tree, unlike patches/ -- asset_dir must stay writable so a model
+        needing an embedding NOT already present in the source can still
+        have it extracted fresh right alongside the reused ones.
+
+        extract_features_single/_parallel write via `h5py.File(path,
+        mode='w')`, which for a path that is a symlink follows it and
+        truncates the file it points to -- confirmed empirically, not
+        assumed. Two consequences of that, both handled below:
+
+        - When `overwrite=True`, never leave (or create) a symlink at any
+          destination this function manages -- extraction will open every
+          one of them in 'w' mode regardless of whether it's "supposed" to
+          be reused, so a symlink left over from an earlier, non-overwrite
+          call against the same asset_dir would have its real target (in
+          the read-only source dir) silently truncated the moment
+          extraction reached that sample.
+        - When reusing (not overwrite), refresh a destination whose
+          symlink target no longer matches the current source instead of
+          leaving it alone -- otherwise a second predict() call reusing
+          the same `asset_dir`/output_dir against a different source (or
+          after the original source's embeddings were regenerated) keeps
+          serving a stale embedding from the first call's source, and
+          extraction's own "already exists" check has no way to notice."""
+        if self.mode != 'inference' or self.config.get('extract_from_wsi'):
+            return  # only the asset-dir predict() case has a separate, read-only source dir
+        if os.path.abspath(self.patch_source_dir) == os.path.abspath(self.asset_dir):
+            return  # nothing separate to reuse from
+        model_name = self.config['patch_encoder']
+        sample_ids = self._get_sample_ids()
+        overwrite = bool(self.config.get('overwrite'))
+        for feature in feature_types:
+            src_dir = os.path.join(self.patch_source_dir, 'emb', feature, f'features_{model_name}')
+            dst_dir = os.path.join(self.asset_dir, 'emb', feature, f'features_{model_name}')
+            if not os.path.isdir(src_dir) and not os.path.isdir(dst_dir):
+                continue
+            os.makedirs(dst_dir, exist_ok=True)
+            for sample_id in sample_ids:
+                src = os.path.join(src_dir, f'{sample_id}.h5')
+                dst = os.path.join(dst_dir, f'{sample_id}.h5')
+                if overwrite:
+                    if os.path.islink(dst):
+                        os.remove(dst)
+                    continue
+                if not os.path.isfile(src):
+                    continue
+                if os.path.islink(dst):
+                    if os.readlink(dst) == src:
+                        continue  # already correctly linked
+                    os.remove(dst)  # stale -- pointed at a different/older source
+                elif os.path.lexists(dst):
+                    continue  # a real (non-symlink) file already sits here -- never touch it
+                os.symlink(src, dst)
+
     def _drop_neighbor_imgs(self, patch_dir: str):
-        """Delete img dataset from neighbor h5 files after feature extraction."""
+        """Delete img dataset from neighbor h5 files after feature extraction.
+
+        Refuses to touch anything outside asset_dir (the location this
+        pipeline instance actually owns/writes into). For an asset-dir
+        predict() target, `patch_dir` can legitimately be the *read-only*
+        source directory's own patches/neighbor/ (see the neighbor_patch_
+        dataroot fix in run_extraction() -- that's the CORRECT place to
+        read neighbor patches FROM for that case) -- but this cleanup step
+        must never delete data there, or it silently corrupts a shared/
+        read-only asset directory for every other consumer of it, the
+        same class of bug the dataroot fix above addresses."""
+        asset_root = os.path.abspath(self.asset_dir)
+        if os.path.commonpath([asset_root, os.path.abspath(patch_dir)]) != asset_root:
+            return
         print("Removing neighbor patch images to free disk space...")
         for h5_path in glob(f"{patch_dir}/*.h5"):
             try:

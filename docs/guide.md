@@ -451,6 +451,30 @@ This runs four steps in order:
 | CV splits | Assigns samples to train/test folds | `<meta_dir>/ids.csv` (with `fold_*` columns) |
 | Feature extraction | Runs patch encoder on all samples | `<data_dir>/emb/<feature_type>/features_<model_name>/` |
 
+Any configured model using `feature_type: neighbor`/`all` (e.g. DeepSpot)
+needs neighbor patches (`<data_dir>/patches/neighbor/`) in addition to the
+target patches above. On `mode: stpbench` data downloaded from the STP-Bench
+HF dataset, neighbor patches are **not** pre-extracted — the first
+`preprocess()` call for such a model re-opens every raw WSI to run tissue
+segmentation + neighbor tiling from scratch, which can take tens of minutes
+*per gigapixel slide* with no fine-grained progress output. Budget for this
+before running it against a large new cohort, and prefer a
+`feature_type: global`-only model (e.g. StNet) for a first smoke test of a
+new dataset.
+
+**Budget disk space too, not just time.** Neighbor patches are stored as
+uncompressed per-spot image grids (e.g. 1120×1120×3 for `num_n: 25`), which
+is far larger than it sounds: on a 19-sample Xenium cohort in-house testing
+measured `patches/neighbor/` reaching **~230 GB** (peaking higher mid-run,
+before per-sample images are dropped post-feature-extraction) against
+**~9 GB** of original WSIs for the same samples — roughly a 25× multiplier.
+First-run wall time for that same 19-sample cohort was ~2h40m for raw
+neighbor-patch extraction plus ~3h30m for neighbor feature extraction (global
+feature extraction alone, for comparison, was ~8 minutes). Scale both numbers
+by sample count and slide resolution before committing a `feature_type:
+neighbor`/`all` model to a large new cohort — this is on top of, not
+instead of, the per-gigapixel time budget above.
+
 After preprocessing, the directory layout looks like:
 
 ```
@@ -483,6 +507,16 @@ preprocess:
   output_dir: /path/to/stp_bench
   meta_dir: input/hest/my_cohort
 ```
+
+**`mode: stpbench` requires `<meta_dir>/ids.csv` to already exist** (a CSV
+with at minimum a `sample_id` column listing the samples to process) —
+unlike `mode: raw`, which generates `ids.csv` itself by scanning
+`input_dir`, `stpbench` mode never scans the download directory for you and
+raises `FileNotFoundError` with the exact expected path if it's missing.
+Create it by hand (or from whatever manifest your download came with)
+*before* calling `preprocess()`; every dataset already under
+`config/data/` in this repo has its `ids.csv` committed under
+`input/<namespace>/<name>/ids.csv` for exactly this reason.
 
 For **new datasets not yet in STPBench**, use `mode: raw` and point `input_dir` at your raw data (per-sample SpaceRanger / Xenium output directories).
 

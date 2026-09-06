@@ -3,13 +3,13 @@
 
 Examples:
     # Full dataset (~444 GB)
-    python scripts/download_data.py --local_dir /path/to/stp_bench
+    python scripts/download_data.py --data_dir /path/to/stp_bench
 
     # One or more datasets (namespace/name, matches config/data/<namespace>/<name>.yaml)
-    python scripts/download_data.py --local_dir /path/to/stp_bench --dataset ncche/xenium
+    python scripts/download_data.py --data_dir /path/to/stp_bench --dataset ncche/xenium
 
     # One or more individual samples
-    python scripts/download_data.py --local_dir /path/to/stp_bench --sample SNU16A --sample SNU16B
+    python scripts/download_data.py --data_dir /path/to/stp_bench --sample SNU16A --sample SNU16B
 
     # --dataset and --sample can be combined and repeated freely.
 """
@@ -46,7 +46,7 @@ def main():
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("--local_dir", required=True, help="Directory to download into")
+    parser.add_argument("--data_dir", required=True, help="Directory to download into")
     parser.add_argument(
         "--dataset", action="append", default=[], metavar="NAMESPACE/NAME",
         help="Download only this dataset's samples (repeatable), e.g. ncche/xenium",
@@ -70,13 +70,13 @@ def main():
     else:
         print("No --dataset/--sample given -- downloading the full dataset (~444 GB).")
 
-    local_dir = snapshot_download(
+    data_dir = snapshot_download(
         repo_id=args.repo_id,
         repo_type="dataset",
-        local_dir=args.local_dir,
+        local_dir=args.data_dir,
         allow_patterns=allow_patterns,
     )
-    print(f"Downloaded to {local_dir}")
+    print(f"Downloaded to {data_dir}")
 
 
 if __name__ == "__main__":

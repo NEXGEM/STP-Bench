@@ -5,7 +5,14 @@ notebooks/
 
 /DeepSpotM
 
-/DeepSpotM
+# Machine-generated scratch configs for WSI-path predict() targets --
+# STPred._materialize_wsi_data_config() regenerates these fresh on every
+# call; not meant to be hand-edited or committed.
+config/data/_wsi_predict/
+
+# GPUDirect Storage compat-mode log, written to the repo root whenever
+# preprocessing runs on a machine without the nvidia-fs driver loaded.
+cufile.log
 
 # Model checkpoints / pretrained weights
 weights/

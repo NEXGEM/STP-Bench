@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 import anndata as ad
 import scanpy as sc
+from tqdm import tqdm
 
 
 def load_data(st_dir, id_path=None):
@@ -22,7 +23,7 @@ def load_data(st_dir, id_path=None):
             + ", ".join(missing[:10])
             + ("..." if len(missing) > 10 else "")
         )
-    return [sc.read_h5ad(file) for file in file_list]
+    return [sc.read_h5ad(file) for file in tqdm(file_list, desc="Loading ST data")]
 
 
 def find_geneset(data_list, n_top_hvg=50, n_top_heg=1000, n_top_hmhvg=200,
@@ -62,7 +63,7 @@ def find_geneset(data_list, n_top_hvg=50, n_top_heg=1000, n_top_hmhvg=200,
         data_lst = [adata[:, common_genes_sorted].copy() for adata in data_list]
 
         union_hvg = set()
-        for adata in data_lst:
+        for adata in tqdm(data_lst, desc="Computing per-sample HVGs"):
             tmp = adata.copy()
             sc.pp.filter_cells(tmp, min_genes=1)
             sc.pp.filter_genes(tmp, min_cells=1)
@@ -96,7 +97,7 @@ def find_geneset(data_list, n_top_hvg=50, n_top_heg=1000, n_top_hmhvg=200,
 
     if method in ('HVG', 'ALL'):
         data_combined = []
-        for adata in data_list:
+        for adata in tqdm(data_list, desc="Normalizing per-sample data"):
             tmp = adata.copy()
             sc.pp.normalize_total(tmp, target_sum=1e4)
             sc.pp.log1p(tmp)

@@ -147,13 +147,13 @@ you pull just the dataset(s) or sample(s) you need instead:
 
 ```bash
 # Full dataset (~444 GB)
-python scripts/download_data.py --local_dir /path/to/stp_bench
+python scripts/download_data.py --data_dir /path/to/download/data
 
 # One or more datasets (namespace/name, matches config/data/<namespace>/<name>.yaml)
-python scripts/download_data.py --local_dir /path/to/stp_bench --dataset ncche/xenium
+python scripts/download_data.py --data_dir /path/to/download/data --dataset ncche/xenium
 
 # One or more individual samples
-python scripts/download_data.py --local_dir /path/to/stp_bench --sample Xenium_LUAD_No14 --sample Xenium_TSU-21
+python scripts/download_data.py --data_dir /path/to/download/data --sample Xenium_LUAD_No14 --sample Xenium_TSU-21
 
 # --dataset and --sample can be combined and repeated freely
 ```
@@ -169,11 +169,11 @@ Set the downloaded directory as `DATA.data_dir` (and `preprocess.output_dir`) in
 
 ```yaml
 DATA:
-  data_dir: /path/to/stp_bench   # root of the downloaded HF dataset
+  data_dir: /path/to/download/data   # root of the downloaded HF dataset
 
 preprocess:
-  input_dir: /path/to/stp_bench
-  output_dir: /path/to/stp_bench
+  input_dir: /path/to/download/data
+  output_dir: /path/to/download/data
 ```
 
 The expected directory layout after download:
@@ -337,7 +337,10 @@ prediction:
 - `"spatial_domain"` — spatial domain clustering via
   [SpaGCN](https://github.com/jianhuupenn/SpaGCN), compared against
   ground-truth-derived domains (ARI / NMI / AMI + Hungarian-matched label
-  accuracy).
+  accuracy). **Slow**: SpaGCN's own resolution search can take on the order
+  of 30+ minutes *per fold* even on a modest sample count — budget for this
+  the same way you would for `deconvolution`, rather than expecting
+  `gene_enrichment`-like turnaround.
 
 ```python
 eval_res = stp.evaluate_internal(data="ncche/xenium")

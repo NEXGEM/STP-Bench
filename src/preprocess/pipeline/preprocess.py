@@ -92,9 +92,17 @@ def preprocess_data(
     return_code, output = run_command(cmd, cwd=str(REPO_ROOT))
 
     if return_code != 0:
-        print(f"Error occurred during preprocessing: {output}")
-        return False
-    
+        # Embed the subprocess's full output directly in the raised
+        # exception rather than just print()-ing it -- a caller running
+        # inside suppress_library_output() (as api.stpbench.preprocess()
+        # does) would otherwise have this print land in the suppressed
+        # sys.stdout and be lost entirely, leaving no way to see why
+        # preprocessing actually failed.
+        raise RuntimeError(
+            f"prepare_data.py exited with code {return_code}.\n"
+            f"--- subprocess output ---\n{output}"
+        )
+
     return True
 
 

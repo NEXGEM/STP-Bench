@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 from typing import Dict, List, Optional, Tuple
 
 import torch
@@ -63,10 +64,25 @@ def run_command(cmd: List[str], verbose: bool = True,
         cwd=cwd,
     )
 
+    # Real destination for the loop below, resolved once: sys.__stdout__ is
+    # the plain-console escape hatch suppress_library_output() (and
+    # BenchmarkLogger, which uses the same convention) relies on to stay
+    # visible while sys.stdout itself is redirected to /dev/null -- but it
+    # is None in some embedded/frozen interpreters, and print(file=None)
+    # silently falls back to (suppressed) sys.stdout rather than raising,
+    # which would make this subprocess's actual status invisible with no
+    # sign anything was swallowed. Falling back to the real sys.stdout
+    # (captured before any suppression) is always strictly better than
+    # that silent swallow. Neither branch reaches a Jupyter/ipykernel
+    # cell's displayed output, since ipykernel's stdout replacement isn't
+    # sys.__stdout__ either -- a real fix for that would need to detect
+    # the kernel and route through it specifically, out of scope here.
+    real_stdout = sys.__stdout__ if sys.__stdout__ is not None else sys.stdout
+
     output = ""
     for line in process.stdout:
         output += line
         if verbose:
-            print(line, end="")
+            print(line, end="", file=real_stdout, flush=True)
 
     return process.wait(), output
