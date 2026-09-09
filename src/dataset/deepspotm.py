@@ -4,8 +4,9 @@ from torchvision.transforms import InterpolationMode
 from dataset.base_dataset import STDataset
 
 # Mirrors DeepSpotM's MidnightEncoder normalization and eval transform
-# (src/model/deepspotm/DeepSpotM/src/deepspotm/image_encoder.py::MidnightEncoder,
-# utils.py::get_eval_transforms with center_crop=True).
+# (deepspotm package -- pip install -r requirements/deepspotm.txt --
+# image_encoder.py::MidnightEncoder, utils.py::get_eval_transforms with
+# center_crop=True).
 _MIDNIGHT_MEAN = (0.5, 0.5, 0.5)
 _MIDNIGHT_STD = (0.5, 0.5, 0.5)
 

@@ -2449,6 +2449,22 @@ class STPred:
             "platform": platform or "visium",
             "n_splits": n_splits or 4,
             "gpus": self._gpus(),
+            # BUG FIX: DataPipeline never received DATA.wsi_dir at all --
+            # only the `preprocess:` section reaches it. For a bare-WSI
+            # predict() target (mode='inference', extract_from_wsi=True),
+            # _materialize_wsi_data_config() already computes the correct
+            # WSI directory into DATA.wsi_dir, but DataPipeline.wsi_dataroot
+            # was derived from preprocess.input_dir instead -- for a single
+            # WSI *file* target that's the file's own full path, not its
+            # parent directory, so H5TileDataset couldn't find the slide
+            # again during feature extraction for any feature_type != 'none'
+            # model (DeepSpot, TRIPLEX, HisToGene, ...) whenever the
+            # extracted patches were coords-only (always true for a
+            # bare-WSI target, since there's no ST data to embed images
+            # from). Threading the already-correct value through here lets
+            # DataPipeline use it instead of re-deriving (and getting it
+            # wrong) from input_dir.
+            "wsi_dir": data_cfg.config.get("DATA", {}).get("wsi_dir"),
         }
 
         feature_tasks = []

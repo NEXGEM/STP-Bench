@@ -1,12 +1,9 @@
-import os
-import sys
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(os.path.join(CURRENT_DIR, "DeepSpotM", "src"))
+# pip-installed package (see requirements/deepspotm.txt), not vendored --
+# `uv pip install -r requirements/deepspotm.txt` before using this model.
 from deepspotm import DeepSpotM
 
 

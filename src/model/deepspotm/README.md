@@ -1,5 +1,21 @@
 # DeepSpotM
 
+## Install
+
+DeepSpotM is a separate pip package, not vendored in this repo:
+
+```bash
+uv pip install -r requirements/deepspotm.txt
+```
+
+Published on PyPI by the original authors — code license
+PolyForm-Noncommercial-1.0.0, non-commercial use only. See
+[ratschlab/DeepSpotM](https://github.com/ratschlab/DeepSpotM) for source,
+[LICENSE](https://github.com/ratschlab/DeepSpotM/blob/main/LICENSE), and
+model weights' own CC-BY-NC-SA-4.0 license
+([WEIGHTS_LICENSE.md](https://github.com/ratschlab/DeepSpotM/blob/main/WEIGHTS_LICENSE.md),
+downloaded separately from the gated HuggingFace repo below).
+
 ## Checkpoint Setup
 
 DeepSpotM is a **gated** HuggingFace repo — request access at
@@ -31,9 +47,3 @@ MODEL:
 DeepSpotM is a multi-source model — `MODEL.source` selects which frozen
 gene-embedding pathway to use: one of `evo2`, `orthrus`, `prott5`, `scgpt`,
 `apertus`. Defaults to `scgpt`.
-
-## Vendored code
-
-`DeepSpotM/` is vendored from [ratschlab/DeepSpotM](https://github.com/ratschlab/DeepSpotM)
-(code: PolyForm-Noncommercial-1.0.0; weights: CC-BY-NC-SA-4.0 — non-commercial
-use only, see `DeepSpotM/LICENSE` and `DeepSpotM/WEIGHTS_LICENSE.md`).

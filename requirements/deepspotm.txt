@@ -1,0 +1,10 @@
+# Optional: only needed for DeepSpotM / DeepSpotMFT (config/model/
+# DeepSpotM.yaml, DeepSpotMFT.yaml). Not installed by scripts/create_env.sh
+# by default -- install separately with:
+#   uv pip install -r requirements/deepspotm.txt
+#
+# Published on PyPI by the original authors (github.com/ratschlab/DeepSpotM).
+# Code license: PolyForm-Noncommercial-1.0.0. Model WEIGHTS (downloaded
+# separately from the gated huggingface.co/ratschlab/DeepSpotM repo, see
+# src/model/deepspotm/README.md) carry a separate CC-BY-NC-SA-4.0 license.
+deepspotm==1.0.0

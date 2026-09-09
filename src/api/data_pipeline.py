@@ -79,6 +79,7 @@ class DataPipeline:
             'overwrite': False,
             'save_neighbor_imgs': False,
             'extract_from_wsi': False,
+            'wsi_dir': None,
         }
         for key, value in defaults.items():
             if key not in self.config:
@@ -115,7 +116,24 @@ class DataPipeline:
             else self.asset_dir
         )
         self.metadata_dir = self._abs(self.config.get('meta_dir')) or self.output_dir
-        self.wsi_dataroot = f"{self.input_dir}/wsis" if mode == 'stpbench' else self.input_dir
+        # BUG FIX: this used to always derive from input_dir, which is a
+        # DIRECTORY for mode='stpbench'/'raw' (dataset root) but can be a
+        # single WSI *file*'s own full path for a bare-WSI predict() target
+        # (mode='inference', extract_from_wsi=True, single-file kind) --
+        # H5TileDataset then can't find the slide again during feature
+        # extraction (needed whenever extracted patches are coords-only,
+        # which they always are for a bare-WSI target) for any
+        # feature_type != 'none' model. STPred._build_preprocess_plan()
+        # already resolves the correct WSI directory into DATA.wsi_dir
+        # (threaded here as config['wsi_dir']) -- prefer that when present,
+        # including the case where a caller passed predict(wsi_dir=...)
+        # explicitly to override where the original slides live.
+        wsi_dir_override = self.config.get('wsi_dir')
+        self.wsi_dataroot = (
+            self._abs(wsi_dir_override) if wsi_dir_override
+            else f"{self.input_dir}/wsis" if mode == 'stpbench'
+            else self.input_dir
+        )
         feature_type = self.config.get('feature_type')
         needed_features = tuple(
             name for name in ('global', 'neighbor', 'target') if _wants_feature(feature_type, name)
