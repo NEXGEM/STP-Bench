@@ -475,12 +475,12 @@ Released under [CC BY-NC-SA 4.0](LICENSE.md) — non-commercial use with attribu
 
 ## Citation
 
-<!-- TODO: add citation once the paper is on arXiv -->
 ```
 @article{stpbench2026,
   title={STP-BENCH: A Unified Systematic Benchmark for Virtual Spatial Transcriptomics from Histopathology Images},
-  author={...},
-  journal={...},
-  year={2026}
+  author={Chung, Youngmin and Ha, Ji Hun and Song, Andrew H. and Almagro-P{\'e}rez, Cristina and Seo, Chaeyoung and Suh, Won Jun and Beom, Jeong Won and Oh, Kyoung Bin and Ruppin, Eytan and Mahmood, Faisal and Lee, Joo Sang},
+  journal={arXiv preprint arXiv:2609.05956},
+  year={2026},
+  doi={10.48550/arXiv.2609.05956}
 }
 ```
