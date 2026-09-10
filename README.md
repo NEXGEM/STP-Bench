@@ -252,7 +252,7 @@ stp_bench/
 from stpbench import STPred
 
 stp = STPred(
-    models=["StNet"],
+    models=["LinearProb", "EGN", "BLEEP", "TRIPLEX", "DeepSpot", "StFlow"],
     gpu=1,
     repo_root="/path/to/repo",  # path where config files exist
 )
@@ -265,7 +265,7 @@ result.save("benchmark_results.csv")
 ```
 
 Config names map exactly to YAML files (`config/data/ncche/xenium.yaml`,
-`config/model/StNet.yaml`, ...). If a file is missing, `STPred` raises an error
+`config/model/LinearProb.yaml`, ...). If a file is missing, `STPred` raises an error
 with the exact path to create.
 
 For the full `STPred` reference (constructor parameters, running each stage
@@ -279,7 +279,7 @@ Primary workflow methods, one line each — see
 parameter references and examples of every one of these:
 
 - `stp.check(data, strict=False)`: validate configs and expected artifacts before a heavy run.
-- `stp.preprocess(data, dry_run=False)`: prepare one dataset for all selected models.
+- `stp.preprocess(data, dry_run=False)`: prepare one dataset for all selected models in one deduplicated pass — shared feature extraction (e.g. two models using the same patch encoder + feature type) runs once, not once per model.
 - `stp.train(data=None)`: train all selected models.
 - `stp.evaluate_internal(data=None)` / `stp.evaluate_external(data, train_data=None)`: evaluate on internal test folds, or a labeled external dataset.
 - `stp.benchmark(internal_data, external_data=None)`: preprocess, train, internal evaluate, and optionally external predict/evaluate, in one call.
