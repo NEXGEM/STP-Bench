@@ -1,0 +1,13 @@
+# Installs every per-model optional extra at once. Most models need nothing
+# beyond requirements/core.txt -- only the ones with a file here have one.
+# If a model isn't referenced below, it has no extra dependency: its
+# config/model/<Name>.yaml runs on core alone.
+#
+#   uv pip install -r requirements/models/all.txt --no-build-isolation
+#
+# (--no-build-isolation is only required for TRIPLEX.txt's flash-attn wheel;
+# harmless for the rest.)
+-r TRIPLEX.txt
+-r DeepSpotM.txt
+# DeepSpotMFT.txt is just -r DeepSpotM.txt (same package) -- already covered
+# above, not repeated here.

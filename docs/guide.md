@@ -32,7 +32,7 @@ Everything else in this guide starts from one `STPred` object:
 from stpbench import STPred
 
 stp = STPred(
-    models=["StNet", "TRIPLEX"],   # or a single model name as a string
+    models=["LinearProb", "EGN", "BLEEP", "TRIPLEX", "DeepSpot", "StFlow"],   # or a single model name as a string
     repo_root="/path/to/repo",     # where config/, logs/, etc. live
     gpu=1,
     gpu_id=0,
@@ -45,7 +45,7 @@ files are only resolved when a workflow method (`preprocess()`, `train()`,
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `models` | *required* | A model config name, or a list of them (`"StNet"` or `["StNet", "TRIPLEX"]`). Every workflow method runs all of these unless overridden per-call (`preprocess(..., models=[...])`, `predict(..., models=[...])`). Must resolve to `config/model/<name>.yaml`. |
+| `models` | *required* | A model config name, or a list of them (`"LinearProb"` or `["LinearProb", "EGN", "BLEEP", "TRIPLEX", "DeepSpot", "StFlow"]`). Every workflow method runs all of these unless overridden per-call (`preprocess(..., models=[...])`, `predict(..., models=[...])`). Must resolve to `config/model/<name>.yaml`. |
 | `repo_root` | `"."` | Root directory containing `config/`, `logs/`, etc. All relative paths in configs (`meta_dir`, `log_path`, `output_dir`, ...) resolve against this, not the process's current working directory. Pass it explicitly whenever you run from somewhere other than the repo root. |
 | `gpu` | `1` | Number of GPUs to use, starting at `gpu_id`. Models run in parallel across `gpu` GPUs when more than one model/fold is queued. |
 | `gpu_id` | `0` | Index of the first GPU. `gpu=2, gpu_id=1` uses physical GPUs 1 and 2. |
@@ -95,19 +95,27 @@ apply to unlabeled prediction targets. `preflight` is an alias for `check`.
 
 ```python
 stp.preprocess(data="ncche/xenium")
-stp.preprocess(data="ncche/xenium", models=["StNet"])   # only prep for one model
+stp.preprocess(data="ncche/xenium", models=["LinearProb"])   # only prep for one model
 stp.preprocess(data="ncche/xenium", overwrite=True)      # force re-processing
 ```
 
 Runs one deduplicated plan for every configured model: raw preprocessing
 (patch/ST extraction), gene-set preparation, cross-validation splits, and
 feature (patch-embedding) extraction, skipping any step whose output already
-exists unless `overwrite=True`. See
+exists unless `overwrite=True`. This is a single pass over the *union* of
+what every configured model needs, not one pass per model — if two models
+both use `DATA.model_name: uni_v2` with `feature_type: global`, that
+embedding is computed once and shared, even though both models ask for it.
+Only a model's own `extra_preprocess` step (e.g. EGN/EGGN graph building,
+OmiCLIP's similarity matrix — see
+[Adding a New Model](#adding-a-new-model)) is inherently model-specific and
+still runs once per model that declares one. See
 [Adding a New Dataset](#adding-a-new-dataset) for what each step produces and
 the raw-vs-`stpbench`-mode distinction. Extra keyword arguments are merged
 into the run's `preprocess:` config (e.g. `platform=`, `n_splits=`); pass
 `dry_run=True` (or construct `STPred(..., dry_run=True)`) to get the computed
-plan back without executing it.
+plan back without executing it — the returned plan's `feature_tasks` list is
+exactly this deduplicated set of `(patch_encoder, feature_type)` work items.
 
 ### Training
 
@@ -143,7 +151,7 @@ stp.evaluate_external(data="hest/LUAD", train_data="ncche/xenium")
 Both are thin wrappers over `evaluate(mode, data=None, external_data=None,
 folds=None, timestamps=None)` (`mode="int"` or `"ext"`) if you need the
 combined form directly. `timestamps` lets you pin a specific training run
-(`{"StNet": "2026-05-18-12-00-00"}`) instead of the latest one; see
+(`{"LinearProb": "2026-05-18-12-00-00"}`) instead of the latest one; see
 [Resuming and Persisting a Run](#resuming-and-persisting-a-run).
 
 ### One-shot Benchmark
@@ -245,7 +253,7 @@ stp.predict(
 )
 
 # Per-call model override -- doesn't mutate stp.models
-stp.predict(data="/path/to/slide.svs", output_dir="/path/to/output", train_data="ncche/xenium", models=["TRIPLEX"])
+stp.predict(data="/path/to/slide.svs", output_dir="/path/to/output", train_data="ncche/xenium", models=["LinearProb"])
 
 # Force re-extraction of patches/embeddings even if output_dir already has them
 stp.predict(data="/path/to/slide.svs", output_dir="/path/to/output", train_data="ncche/xenium", overwrite=True)
@@ -328,7 +336,7 @@ need, without re-running `train()`:
 ```python
 stp = STPred.from_run(
     data="ncche/xenium",
-    models=["StNet"],
+    models=["LinearProb"],
     timestamp="2026-05-18-12-00-00",   # omit to auto-pick each model's latest run
 )
 stp.evaluate_external(data="hest/LUAD")
@@ -346,7 +354,7 @@ exactly where this one left off:
 ```python
 stp.save_state("logs/my_stpred_state.yaml")
 
-stp2 = STPred(models=["StNet"])
+stp2 = STPred(models=["LinearProb"])
 stp2.load_state("logs/my_stpred_state.yaml")
 stp2.predict(data="cptac/xenium")
 ```
@@ -362,7 +370,7 @@ stp.list_data()               # data config names available under config/data/
 stp.list_models()              # echoes back stp.models — what THIS instance was constructed with
 stp.list_available_models()    # model config names available under config/model/ (discovery, not stp.models)
 stp.describe_data("ncche/xenium")
-stp.describe_model("StNet")
+stp.describe_model("LinearProb")
 
 # As classmethods: pass repo_root explicitly if not running from repo root.
 STPred.list_data(repo_root="/path/to/repo")
@@ -438,7 +446,7 @@ preprocess:
 ### Step 3 — Run preprocessing
 
 ```python
-stp = STPred(models=["StNet"])
+stp = STPred(models=["LinearProb"])
 stp.preprocess(data="my_namespace/my_data")
 ```
 
@@ -459,7 +467,7 @@ HF dataset, neighbor patches are **not** pre-extracted — the first
 segmentation + neighbor tiling from scratch, which can take tens of minutes
 *per gigapixel slide* with no fine-grained progress output. Budget for this
 before running it against a large new cohort, and prefer a
-`feature_type: global`-only model (e.g. StNet) for a first smoke test of a
+`feature_type: global`-only model (e.g. LinearProb) for a first smoke test of a
 new dataset.
 
 **Budget disk space too, not just time.** Neighbor patches are stored as

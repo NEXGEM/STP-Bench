@@ -1,4 +1,0 @@
-# Install only after requirements/torch-cu118.txt.
-# This wheel is selected for Python 3.11 + torch 2.3 + CUDA 11.8 and works on
-# Ubuntu 20.04 / glibc 2.31 hosts.
-flash-attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.5.9.post1/flash_attn-2.5.9.post1+cu118torch2.3cxx11abiFALSE-cp311-cp311-linux_x86_64.whl

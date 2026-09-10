@@ -1,0 +1,7 @@
+# Installs every downstream-analysis extra at once. gene_enrichment needs
+# nothing beyond requirements/core.txt, so there is no file for it here --
+# only deconvolution and spatial_domain have their own extra dependencies.
+#
+#   uv pip install -r requirements/downstreams/all.txt
+-r deconvolution.txt
+-r spatial_domain.txt

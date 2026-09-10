@@ -1,0 +1,32 @@
+# Optional: only needed for stp.downstream(..., type="spatial_domain")
+# (SpaGCN). Not installed by scripts/create_env.sh by default:
+#   uv pip install -r requirements/downstreams/spatial_domain.txt
+#
+# Verified working (real end-to-end SpaGCN clustering run) with the same env
+# as requirements/downstreams/deconvolution.txt (torch==2.5.1+cu121,
+# scanpy==1.11.5, scvi-tools==1.3.3).
+SpaGCN==1.2.7
+# SpaGCN depends on louvain (unpinned) for its init="louvain" clustering step.
+# louvain==0.7.1 (the version pip/uv resolves without this pin) segfaults
+# against requirements/core/runtime.txt's python-igraph>=0.11.0 -- its
+# compiled C extension predates igraph's 0.11/1.0 ABI. louvain>=0.8.2 is
+# built against the newer igraph and runs cleanly; verified with a real
+# SpaGCN run reproducing reference cluster labels exactly (ARI=1.0).
+louvain>=0.8.2
+# louvain's __init__.py does `from pkg_resources import ...` unconditionally.
+# setuptools>=81 removed pkg_resources entirely (it's slated for full removal
+# upstream), which breaks the import before louvain's clustering code ever
+# runs -- pin below that until louvain itself drops the pkg_resources import.
+# NOTE: this constrains the whole environment's setuptools version, so it
+# also applies if requirements/downstreams/deconvolution.txt is installed
+# into the same venv.
+setuptools<81
+# NOTE (unverified): installing this file into an env that already has
+# requirements/core/runtime.txt's leidenalg + python-igraph (used by
+# gene_enrichment's own clustering step) can trigger pip to downgrade
+# python-igraph to satisfy louvain's pin, which then conflicts with
+# leidenalg's own `igraph<2.0,>=1.0.0` requirement (a resolver warning, not
+# necessarily a runtime failure). Not confirmed whether gene_enrichment
+# still works correctly after installing this file in the same environment
+# -- if you hit this, verify gene_enrichment separately rather than
+# assuming it's fine.

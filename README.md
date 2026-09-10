@@ -40,14 +40,48 @@ source .stpbench/bin/activate
 ```
 
 <details>
-<summary><strong>Installation details</strong> (CUDA extras, manual setup, compatibility)</summary>
+<summary><strong>Installation details</strong> (requirements layout, CUDA extras, manual setup, compatibility)</summary>
+
+#### Requirements Layout
+
+```
+requirements/
+├── core/                 # essential — torch stack, runtime, preprocessing
+│   ├── torch-cu118.txt
+│   ├── runtime.txt
+│   └── preprocess.txt
+├── core.txt               # aggregator: -r core/torch-cu118.txt + runtime.txt + preprocess.txt
+├── cuda.txt                # optional — RAPIDS cuCIM/cuDF preprocessing acceleration
+├── models/                # optional — one file per model that needs something beyond core
+│   ├── TRIPLEX.txt           # Flash Attention wheel
+│   ├── DeepSpotM.txt           # the deepspotm PyPI package
+│   ├── DeepSpotMFT.txt          # -r DeepSpotM.txt
+│   └── all.txt                   # installs every file above at once
+└── downstreams/            # optional — one file per stp.downstream() type that needs something extra
+    ├── deconvolution.txt
+    ├── spatial_domain.txt
+    └── all.txt                # installs every file above at once
+```
+
+A model or downstream type with no file here needs nothing beyond
+`requirements/core.txt` — 22 of the 25 built-in models and
+`gene_enrichment` fall in that category, so there's no placeholder file to
+maintain for them.
+
+Only `requirements/core.txt` is installed by default (via `scripts/create_env.sh`).
+Everything else is opt-in:
+
+| Group | Files | When needed |
+|---|---|---|
+| **Core** (always) | `requirements/core.txt` (→ `core/torch-cu118.txt` + `core/runtime.txt` + `core/preprocess.txt`) | Everyone — the torch stack, benchmark runtime, and preprocessing deps that every built-in model runs on |
+| **Per-model extras** | `requirements/models/<ModelName>.txt`, or `requirements/models/all.txt` for all of them at once | `TRIPLEX.txt` (Flash Attention — falls back cleanly if absent), `DeepSpotM.txt` / `DeepSpotMFT.txt` (pulls in the `deepspotm` PyPI package). Every other model runs on core alone |
+| **Preprocessing acceleration** | `requirements/cuda.txt` | Optional RAPIDS cuCIM/cuDF extras for faster tissue segmentation — only on machines with CUDA 12 RAPIDS support |
+| **Downstream analyses** | `requirements/downstreams/<type>.txt`, or `requirements/downstreams/all.txt` for all of them at once | `deconvolution.txt` (cell2location), `spatial_domain.txt` (SpaGCN); `gene_enrichment` needs nothing extra (already in core) |
 
 The setup script creates a Python 3.11 virtual environment and installs:
 
 - editable `stp_bench`
-- `torch==2.3.1+cu118`
-- `torchvision==0.18.1+cu118`
-- `torchaudio==2.3.1+cu118`
+- `torch==2.3.1+cu118`, `torchvision==0.18.1+cu118`, `torchaudio==2.3.1+cu118`
 - runtime benchmark dependencies
 - preprocessing dependencies
 - `flash-attn==2.5.9.post1` *(optional — only needed for models that use Flash Attention)*
@@ -70,14 +104,42 @@ only on machines where RAPIDS CUDA 12 packages are supported:
 INSTALL_CUDA_EXTRAS=1 bash scripts/create_env.sh .stpbench
 ```
 
-#### Optional: Downstream Analyses Extras
+#### Optional: Per-Model Extras
 
-[Downstream analyses](#downstream-analyses) (`stp.downstream(...)`) need
-`cell2location` / `SpaGCN` for the `deconvolution` / `spatial_domain`
-modes — heavier dependencies, not installed by the setup script by default:
+Only `TRIPLEX` and `DeepSpotM` / `DeepSpotMFT` need anything beyond core; every
+other model runs on `requirements/core.txt` alone:
 
 ```bash
-uv pip install -r requirements/downstream.txt
+# TRIPLEX — optional Flash Attention speedup (falls back cleanly if skipped)
+uv pip install -r requirements/models/TRIPLEX.txt --no-build-isolation
+
+# DeepSpotM / DeepSpotMFT — pulls in the deepspotm PyPI package
+uv pip install -r requirements/models/DeepSpotM.txt
+
+# ...or install every per-model extra at once:
+uv pip install -r requirements/models/all.txt --no-build-isolation
+```
+
+See each model's own README under `src/model/<name>/` for details (e.g.
+[`src/model/deepspotm/README.md`](src/model/deepspotm/README.md) also covers
+the gated HuggingFace checkpoint setup).
+
+#### Optional: Downstream Analyses Extras
+
+[Downstream analyses](#downstream-analyses) (`stp.downstream(...)`) — only
+`deconvolution` and `spatial_domain` need anything beyond core:
+
+```bash
+# deconvolution — cell2location
+uv pip install -r requirements/downstreams/deconvolution.txt
+
+# spatial_domain — SpaGCN
+uv pip install -r requirements/downstreams/spatial_domain.txt
+
+# ...or install both at once:
+uv pip install -r requirements/downstreams/all.txt
+
+# gene_enrichment needs nothing extra — already covered by requirements/core.txt
 ```
 
 #### Manual Setup
@@ -89,24 +151,11 @@ uv venv --python 3.11 .stpbench
 source .stpbench/bin/activate
 
 python -m pip install --upgrade pip setuptools wheel packaging ninja
-uv pip install -r requirements/torch-cu118.txt
 uv pip install -e .
-uv pip install -r requirements/runtime.txt
-uv pip install -r requirements/preprocess.txt
+uv pip install -r requirements/core.txt
 
-# Optional: only needed for models that use Flash Attention
-uv pip install -r requirements/flash-attn.txt --no-build-isolation
-```
-
-`requirements/all.txt` contains the pinned torch stack plus runtime and
-preprocessing dependencies:
-
-```bash
-uv pip install -e .
-uv pip install -r requirements/all.txt
-
-# Optional: only needed for models that use Flash Attention
-uv pip install -r requirements/flash-attn.txt --no-build-isolation
+# Optional: only needed for TRIPLEX's Flash Attention path
+uv pip install -r requirements/models/TRIPLEX.txt --no-build-isolation
 ```
 
 #### Compatibility Contract
@@ -203,7 +252,7 @@ stp_bench/
 from stpbench import STPred
 
 stp = STPred(
-    models=["StNet"],
+    models=["LinearProb", "EGN", "BLEEP", "TRIPLEX", "DeepSpot", "StFlow"],
     gpu=1,
     repo_root="/path/to/repo",  # path where config files exist
 )
@@ -216,7 +265,7 @@ result.save("benchmark_results.csv")
 ```
 
 Config names map exactly to YAML files (`config/data/ncche/xenium.yaml`,
-`config/model/StNet.yaml`, ...). If a file is missing, `STPred` raises an error
+`config/model/LinearProb.yaml`, ...). If a file is missing, `STPred` raises an error
 with the exact path to create.
 
 For the full `STPred` reference (constructor parameters, running each stage
@@ -230,7 +279,7 @@ Primary workflow methods, one line each — see
 parameter references and examples of every one of these:
 
 - `stp.check(data, strict=False)`: validate configs and expected artifacts before a heavy run.
-- `stp.preprocess(data, dry_run=False)`: prepare one dataset for all selected models.
+- `stp.preprocess(data, dry_run=False)`: prepare one dataset for all selected models in one deduplicated pass — shared feature extraction (e.g. two models using the same patch encoder + feature type) runs once, not once per model.
 - `stp.train(data=None)`: train all selected models.
 - `stp.evaluate_internal(data=None)` / `stp.evaluate_external(data, train_data=None)`: evaluate on internal test folds, or a labeled external dataset.
 - `stp.benchmark(internal_data, external_data=None)`: preprocess, train, internal evaluate, and optionally external predict/evaluate, in one call.
@@ -372,14 +421,15 @@ Returns a `DownstreamResult` — the same dict-compatible shape as
 
 #### Dependencies
 
-`gene_enrichment` and `spatial_domain` need `gseapy` / `leidenalg` /
-`python-igraph` (already in `requirements/runtime.txt`). `deconvolution`
-and `spatial_domain` additionally need `cell2location` / `SpaGCN`, kept in a
-separate `requirements/downstream.txt` — heavier, and not installed by
-`scripts/create_env.sh` by default:
+`gene_enrichment` needs `gseapy` — already in `requirements/core/runtime.txt`,
+nothing extra to install. `deconvolution` and `spatial_domain` need
+`cell2location` / `SpaGCN` respectively — heavier deps, each kept in its own
+`requirements/downstreams/<type>.txt`, not installed by `scripts/create_env.sh`
+by default:
 
 ```bash
-uv pip install -r requirements/downstream.txt
+uv pip install -r requirements/downstreams/deconvolution.txt
+uv pip install -r requirements/downstreams/spatial_domain.txt
 ```
 
 #### Reference data

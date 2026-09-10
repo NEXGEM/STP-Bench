@@ -1,0 +1,4 @@
+# DeepSpotMFT (LoRA fine-tuned DeepSpotM, config/model/DeepSpotMFT.yaml)
+# uses the same deepspotm PyPI package as zero-shot DeepSpotM -- see
+# requirements/models/DeepSpotM.txt for install notes / license details.
+-r DeepSpotM.txt

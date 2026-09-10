@@ -23,7 +23,7 @@ def import_cell2location():
         from cell2location.models import Cell2location, RegressionModel
     except Exception as exc:  # pragma: no cover - environment check
         raise ImportError(
-            "Could not import cell2location. Install it first (see requirements/downstream.txt).\n"
+            "Could not import cell2location. Install it first (see requirements/downstreams/deconvolution.txt).\n"
             f"Original error: {exc}"
         ) from exc
     return Cell2location, RegressionModel
