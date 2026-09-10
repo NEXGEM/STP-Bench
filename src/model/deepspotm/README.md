@@ -5,7 +5,7 @@
 DeepSpotM is a separate pip package, not vendored in this repo:
 
 ```bash
-uv pip install -r requirements/deepspotm.txt
+uv pip install -r requirements/models/DeepSpotM.txt
 ```
 
 Published on PyPI by the original authors — code license

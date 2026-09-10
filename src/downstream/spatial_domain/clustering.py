@@ -25,7 +25,7 @@ def import_spagcn():
         import SpaGCN as spg
     except Exception as exc:  # pragma: no cover - environment check
         raise ImportError(
-            "Could not import SpaGCN. Install it first (see requirements/downstream.txt):\n"
+            "Could not import SpaGCN. Install it first (see requirements/downstreams/spatial_domain.txt):\n"
             "  pip install SpaGCN==1.2.7\n"
             f"Original error: {exc}"
         ) from exc

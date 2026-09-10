@@ -255,7 +255,7 @@ def _iter_hest(*args, **kwargs):
     except ImportError as exc:
         raise ImportError(
             "HEST preprocessing requires the 'hest' package. "
-            "Install preprocessing dependencies with: pip install -r requirements/preprocess.txt"
+            "Install preprocessing dependencies with: pip install -r requirements/core/preprocess.txt"
         ) from exc
     hest_dir = args[0] if args else kwargs.get('hest_dir')
     if hest_dir:
@@ -274,7 +274,7 @@ def _load_hest_dataset(*args, **kwargs):
     except ImportError as exc:
         raise ImportError(
             "Downloading HEST patches requires the Hugging Face 'datasets' package. "
-            "Install preprocessing dependencies with: pip install -r requirements/preprocess.txt"
+            "Install preprocessing dependencies with: pip install -r requirements/core/preprocess.txt"
         ) from exc
     return datasets.load_dataset(*args, **kwargs)
 

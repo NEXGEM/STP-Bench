@@ -2,8 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# pip-installed package (see requirements/deepspotm.txt), not vendored --
-# `uv pip install -r requirements/deepspotm.txt` before using this model.
+# pip-installed package (see requirements/models/DeepSpotM.txt), not vendored --
+# `uv pip install -r requirements/models/DeepSpotM.txt` before using this model.
 from deepspotm import DeepSpotM
 
 

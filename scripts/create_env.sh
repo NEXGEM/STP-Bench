@@ -16,13 +16,9 @@ PYTHON_BIN="${ENV_DIR}/bin/python"
 # runtime, so pin below that to keep pkg_resources available.
 uv pip install --python "${PYTHON_BIN}" --upgrade pip "setuptools<81" wheel packaging ninja
 
-echo "Installing PyTorch CUDA 11.8 stack..."
-uv pip install --python "${PYTHON_BIN}" -r requirements/torch-cu118.txt
-
-echo "Installing STpredBench runtime dependencies..."
+echo "Installing core dependencies (torch stack + runtime + preprocessing)..."
 uv pip install --python "${PYTHON_BIN}" -e .
-uv pip install --python "${PYTHON_BIN}" -r requirements/runtime.txt
-uv pip install --python "${PYTHON_BIN}" -r requirements/preprocess.txt
+uv pip install --python "${PYTHON_BIN}" -r requirements/core.txt
 
 if [[ "${INSTALL_CUDA_EXTRAS}" == "1" ]]; then
   echo "Installing optional CUDA dataframe extras..."
@@ -33,7 +29,7 @@ if [[ "${SKIP_FLASH_ATTN}" == "1" ]]; then
   echo "Skipping flash-attn installation (SKIP_FLASH_ATTN=1)."
 else
   echo "Installing flash-attn from the pinned prebuilt wheel..."
-  uv pip install --python "${PYTHON_BIN}" -r requirements/flash-attn.txt --no-build-isolation
+  uv pip install --python "${PYTHON_BIN}" -r requirements/models/TRIPLEX.txt --no-build-isolation
 fi
 
 echo "Verifying imports..."

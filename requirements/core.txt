@@ -1,0 +1,13 @@
+# Essential environment: everything needed to preprocess data and run the
+# core STP-Bench models (torch stack + benchmark runtime + preprocessing).
+# Installed by scripts/create_env.sh by default.
+#
+#   uv pip install -e .
+#   uv pip install -r requirements/core.txt
+#
+# See requirements/models/ for per-model optional extras (e.g. TRIPLEX's
+# Flash Attention, DeepSpotM) and requirements/downstreams/ for
+# downstream-analysis extras (deconvolution, spatial_domain).
+-r core/torch-cu118.txt
+-r core/runtime.txt
+-r core/preprocess.txt

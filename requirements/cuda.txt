@@ -2,3 +2,13 @@ cucim-cu12>=25.8.0
 cudf-cu12>=25.8.0
 dask-cudf-cu12>=25.8.0
 raft-dask-cu12>=25.8.0
+# Without this pin, the resolver is free to pick a RAPIDS 25.8+ release
+# train (e.g. 26.8.x) that requires pandas>=3.0 -- silently breaking
+# requirements/core/runtime.txt's pandas>=2.0,<3.0 pin (and, with it,
+# pandas-3.0 behavioral changes scanpy/anndata/squidpy aren't verified
+# against here). Verified: with this pin present the resolver picks the
+# RAPIDS 26.6.x train instead (pandas<3.0-compatible) and installs cleanly
+# -- confirmed with a real (non-dry-run) install, not just dependency
+# resolution, plus a working import of pandas/scanpy/anndata/squidpy/
+# cudf/cucim/trident/hest afterward.
+pandas>=2.0,<3.0
