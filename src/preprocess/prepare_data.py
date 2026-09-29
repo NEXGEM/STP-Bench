@@ -932,9 +932,12 @@ if __name__ == "__main__":
         os.makedirs(f"{output_dir}/st", exist_ok=True)
 
         manifest_dir = meta_dir or output_dir
+        # _resolve_hest_ids() only reads sample_id back out of the ids.csv
+        # that must already exist (it never discovers samples from
+        # input_dir) -- writing it straight back here was a no-op round
+        # trip that destroyed every other column (fold_N, case_id, ...)
+        # already in that file. Do not re-save it.
         sample_ids = _resolve_hest_ids(input_dir, output_dir, meta_dir=manifest_dir)
-        os.makedirs(manifest_dir, exist_ok=True)
-        pd.DataFrame(sample_ids, columns=['sample_id']).to_csv(f"{manifest_dir}/ids.csv", index=False)
 
         failed_samples = []
         for name in tqdm(sample_ids):
