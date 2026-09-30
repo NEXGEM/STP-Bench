@@ -3,3 +3,6 @@ valis-hest>=0.0.1
 accelerate==1.13.0
 hest @ git+https://github.com/mahmoodlab/HEST@3ddb5eaf5bd2a8133e0c0e8015816489a3d99dc3
 trident @ git+https://github.com/mahmoodlab/TRIDENT
+# Tissue segmentation / patching for the STP-Bench reference patches (core/utils/preprocess_utils.py).
+# 1.0.4, 1.0.5 and 1.0.6 were verified to reproduce them identically; older/newer are untested.
+hestcore>=1.0.4,<1.0.7
