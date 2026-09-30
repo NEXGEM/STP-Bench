@@ -28,7 +28,7 @@ DATA:
   model_name: uni_v2
   load_level: patch
   organ: Pancreas
-  tech: Xenium
+  tech: Visium
   train_dataloader:
     batch_size: 128
     num_workers: 4
@@ -41,7 +41,7 @@ DATA:
     shuffle: false
 preprocess:
   mode: stpbench
-  platform: xenium
+  platform: visium
   meta_dir: input/wustl/PDAC
   input_dir: /path/to/stp_bench_data
   output_dir: /path/to/stp_bench_data
