@@ -21,6 +21,7 @@ MODEL:
   w_cnn: 0.3
   w_vit: 0.3
   w_pcc: 0.5
+  non_negative_output: true   # softplus on the fused / CNN / ViT predictions (expression is non-negative)
   adapter: default
 DATA:
   dataset_name: STDataset

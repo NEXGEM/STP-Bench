@@ -1,0 +1,4 @@
+# Optional: TRIPLEXv2 uses the same Flash Attention path as TRIPLEX (falls back cleanly if absent).
+# It additionally needs access to MahmoodLab/UNI2-h (gated on HuggingFace; the weights are read from the
+# HF cache or from MODEL.uni_weights_path).
+-r TRIPLEX.txt

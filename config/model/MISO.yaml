@@ -1,0 +1,22 @@
+# MISO (Owkin): local-attention MIL over the spots of a slide + cosine loss. https://github.com/owkin/miso_code
+# Slide-level model: one slide is one training step and inference is never chunked (spots attend to their
+# spatial neighbors). DATA.model_name picks the frozen patch encoder (uni_v2, the benchmark default), shared
+# with the other models; the reference uses H0-mini (768-d), so img_embedding_dim must equal the encoder's
+# embedding width. The reference trains on raw counts; here it is trained on the benchmark's normalized labels.
+MODEL:
+  model_name: miso.MISO
+  img_embedding_dim: 1536     # embedding width of DATA.model_name (uni_v2)
+  emb_dim: 2048
+  depth: 1
+  d_model: 1024
+  num_heads: 64
+  dropout: 0.0
+  adapter: miso
+DATA:
+  dataset_name: MisoDataset
+  num_neighbors: 37
+  train_dataloader:
+    batch_size: 1             # one slide per step, as in the reference
+TRAINING:
+  mode: max
+  save_best_only: true

@@ -1,17 +1,25 @@
+from .cammst import CammstAdapter
 from .contrastive import ContrastiveAdapter
 from .default import DefaultAdapter
 from .deepspot import DeepSpotAdapter
 from .egn import EGNAdapter
+from .generag import GeneRAGAdapter
 from .graph import GraphAdapter
+from .hisdiff import HisDiffAdapter
+from .miso import MisoAdapter
 from .sepal import SepalAdapter
 from .stem import StemAdapter
 from .triplex import TriplexAdapter
 
 
 _ADAPTER_TYPES = {
+    "cammst": CammstAdapter,
     "default": DefaultAdapter,
     "deepspot": DeepSpotAdapter,
     "egn": EGNAdapter,
+    "generag": GeneRAGAdapter,
+    "hisdiff": HisDiffAdapter,
+    "miso": MisoAdapter,
     "triplex": TriplexAdapter,
     "graph": GraphAdapter,
     "contrastive": ContrastiveAdapter,

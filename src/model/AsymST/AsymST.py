@@ -115,6 +115,7 @@ class AsymST(nn.Module):
         w_vit: float = 0.3,
         w_pcc: float = 0.5,
         max_batch_size: int = 32,
+        non_negative_output: bool = True,
     ):
         super().__init__()
 
@@ -123,6 +124,7 @@ class AsymST(nn.Module):
         self.w_vit = float(w_vit)
         self.w_pcc = float(w_pcc)
         self.max_batch_size = max_batch_size
+        self.non_negative_output = non_negative_output
 
         # Encoders
         self.cnn_branch = DenseNet121Branch(
@@ -220,6 +222,9 @@ class AsymST(nn.Module):
         pred_fuse = self.pred_head_fuse(enc["z"])
         pred_cnn = self.pred_head_cnn(enc["z_cnn"])
         pred_vit = self.pred_head_vit(enc["z_vit"])
+        if self.non_negative_output:
+            # as the other regression models: softplus before the loss, so the heads train on it
+            pred_fuse, pred_cnn, pred_vit = F.softplus(pred_fuse), F.softplus(pred_cnn), F.softplus(pred_vit)
         return pred_fuse, pred_cnn, pred_vit
 
     def _compute_loss(self, pred_fuse, pred_cnn, pred_vit, label):

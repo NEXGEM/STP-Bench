@@ -1,0 +1,22 @@
+# GeneRAG (MICCAI 2026): linear probe on frozen patch embeddings (anchor genes)
+# + Dual-Constrained Retrieval against a reference bank of training spots.
+# DATA.model_name selects the frozen patch encoder used for both the head input
+# and the morphology bank (uni_v2, the benchmark default).
+MODEL:
+  model_name: generag.GeneRAG
+  img_embedding_dim: 1536       # must match the DATA.model_name encoder width
+  num_anchor_genes: 200         # head width; keep equal to DATA.num_anchor_genes
+  alpha: 0.01                   # lambda in Eq. 1
+  l1_ratio: 0.9                 # 1 - gamma in Eq. 1
+  embedding_ratio: 0.75         # omega in Eq. 1 (0 = anchors only, 1 = embeddings only)
+  positive: true
+  adapter: generag
+DATA:
+  dataset_name: GeneRAGDataset
+  # anchors = {anchor_gene_type}_{num_anchor_genes}genes.json in the dataset's meta_dir;
+  # they must be a subset of the DATA gene panel (gene_type/num_genes).
+  anchor_gene_type: hmhvg
+  num_anchor_genes: 200
+TRAINING:
+  mode: max
+  save_best_only: true

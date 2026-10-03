@@ -1,0 +1,50 @@
+# CAMMST (Kim et al., MICCAI 2026): masked autoencoder over the spots of a slide. https://github.com/Kyyle2114/CAMMST
+# Slide-level model: one slide is one training step and inference is never chunked (every spot attends to every
+# other spot). DATA.model_name picks the frozen patch encoder (uni_v2 = UNI2-h, the reference's encoder and the
+# benchmark default); input_dim must equal its embedding width.
+#
+# Evaluation (val/test/predict) is image-only (`infer_with_all_mask`, the reference's visible_ratio=0): no
+# expression is revealed, so held-out labels cannot leak. `visible_ratio` below only controls TRAINING, where the
+# visible spots' expression is input and the masked ones are reconstructed.
+#
+# Differences from the reference protocol: it trains with 8-fold CV, lr 2e-4, weight decay 5e-2, a per-step
+# cosine schedule with 100 warm-up epochs and selects on the validation loss at visible_ratio=0.1; here the shared
+# benchmark trainer (BaseModule optimizer/scheduler, val_target = PCC of the all-masked prediction) is used. The
+# reference computes the bio-salience target on `counts_spcs_to_8n` counts; here on the benchmark's normalized labels.
+GENERAL:
+  use_amp: false          # the reference trains in fp32 (mixed_precision: "no")
+MODEL:
+  model_name: cammst.CAMMSTModel
+  input_dim: 1536         # embedding width of DATA.model_name (uni_v2)
+  embed_dim: 768
+  visible_ratio: 0.1
+  joint_depth: 3
+  num_heads: 8
+  mlp_ratio: 2.0
+  attn_dropout: 0.1
+  proj_dropout: 0.1
+  ffn_activation: swiglu
+  contrastive_dim: 384
+  decoder_depth: 2
+  norm_type: rms
+  region_based_sampling: true
+  num_regions: 3
+  sampler_type: adaptive
+  recon_weight: 1.0
+  pcc_weight: 0.5
+  sample_weight: 1.0e-3
+  contrast_weight: 0.05
+  contrast_temp: 1.0
+  contrastive_type: soft
+  bio_salience_method: scale_aware_ranking
+  bio_salience_beta: 1.5
+  non_negative_output: true   # softplus on the reconstructed expression, before the losses (a deviation from the reference)
+  adapter: cammst
+DATA:
+  dataset_name: CAMMSTDataset
+  k_neighbors: 8          # neighbors for the local bio-salience score (training target only)
+  train_dataloader:
+    batch_size: 1         # one slide per step, as in the reference
+TRAINING:
+  mode: max
+  save_best_only: true

@@ -10,6 +10,7 @@ MODEL:
   repo_id_or_path: ratschlab/DeepSpotM
   source: scgpt
   device: cpu
+  non_negative_output: false  # zero-shot: the pretrained output is used as is (it can be slightly negative)
 DATA:
   dataset_name: DeepSpotMDataset
   feature_type: none

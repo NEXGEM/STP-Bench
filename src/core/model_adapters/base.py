@@ -38,6 +38,12 @@ class ModelAdapter:
             batch = {k: v for k, v in batch.items() if k != "label"}
         return module.model(**batch, phase=phase, device=module.device.type)
 
+    def val_num_outputs(self, config):
+        """Number of output columns scored during validation. Defaults to the full
+        output panel; an adapter whose validation predicts a subset (e.g. GeneRAG's
+        anchor genes) overrides this together with `get_label`."""
+        return config.DATA.num_outputs
+
     def get_label(self, module, batch, outputs, stage):
         return batch["label"]
 

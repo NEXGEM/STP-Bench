@@ -1,0 +1,32 @@
+# TRIPLEXv2: TRIPLEX whose target encoder (ResNet18, trained end-to-end) is replaced by a FROZEN UNI2-h
+# patch-token extractor run online (no_grad, so the train-time flip/rotate augmentation is kept).
+# Everything else (neighbor / global / fusion encoders, losses) is TRIPLEX unchanged.
+# The 256 UNI patch tokens are projected 1536 -> emb_dim by a trainable linear layer.
+# Cost vs TRIPLEX (RTX A5000, batch 128, fp16): ~1.7x step time (UNI2-h forward ~0.8 s/step). The frozen
+# UNI2-h weights are NOT saved in checkpoints (see model/TRIPLEXv2/TRIPLEXv2.py::FrozenUNI).
+MODEL:
+  model_name: TRIPLEXv2.TRIPLEXv2
+  emb_dim: 1536
+  depth1: 1
+  depth2: 2
+  depth3: 1
+  num_heads1: 8
+  num_heads2: 8
+  num_heads3: 8
+  mlp_ratio1: 2
+  mlp_ratio2: 2
+  mlp_ratio3: 2
+  dropout1: 0.15
+  kernel_size: 3
+  pos_layer: spatialformer
+  max_batch_size: 256     # spots per inference chunk (each chunk also runs UNI2-h)
+  uni_weights_path: ~     # local UNI2-h pytorch_model.bin; ~ = read MahmoodLab/UNI2-h from the HuggingFace cache
+  adapter: triplex
+DATA:
+  dataset_name: TriDataset
+  feature_type:
+    - global
+    - neighbor
+  model_name: uni_v2      # encoder of the cached global/neighbor embeddings (the target branch is UNI2-h too)
+preprocess:
+  save_neighbor_imgs: true

@@ -12,3 +12,8 @@ from .m2ort import M2OSTDataset
 from .triplex import TriDataset, GlobalDataset, StrideDataset
 from .stpath import STPathDataset
 from .deepspotm import DeepSpotMDataset
+from .generag import GeneRAGDataset
+from .hisdiff import HisDiffDataset
+from .miso import MisoDataset
+from .cammst import CAMMSTDataset
+from .nh2st import NH2STDataset

@@ -15,8 +15,11 @@ class DeepSpotMModule(nn.Module):
     """
 
     def __init__(self, repo_id_or_path='ratschlab/DeepSpotM', source=None, device='cpu', gene_path=None,
-                 max_batch_size=32):
+                 max_batch_size=32, non_negative_output=False):
         super(DeepSpotMModule, self).__init__()
+        # Off by default: zero-shot DeepSpotM keeps the pretrained model's output as is. The fine-tuning config
+        # (DeepSpotMFT.yaml) turns it on so the tuned head learns on a softplus output, like the other regression models.
+        self.non_negative_output = non_negative_output
         self.model, self.image_processor = DeepSpotM.from_pretrained(
             repo_id_or_path, source=source, device=device,
         )
@@ -41,6 +44,8 @@ class DeepSpotMModule(nn.Module):
         else:
             expression, _, _ = self.model(img, gene_indices=gene_idx)
         output = expression.to(device)
+        if self.non_negative_output:
+            output = F.softplus(output)
 
         if label is not None:
             loss = F.mse_loss(output, label)
