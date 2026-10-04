@@ -8,7 +8,7 @@ TRAINING:
   monitor: PearsonCorrCoef
   mode: max
   early_stopping:
-    patience: 20
+    patience: 10
   lr_scheduler:
     patience: 5
     factor: 0.1
