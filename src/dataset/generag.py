@@ -83,7 +83,8 @@ class GeneRAGDataset(STDataset):
         # panel; for external evaluation self.genes may be a narrower
         # genes_override, which BaseModule applies afterwards through
         # gene_output_indices.
-        self.panel_genes = self._resolve_genes(gene_type, num_genes, num_outputs, ref_data_dir, None)
+        # External evaluation overwrites num_outputs with the overlap size, so the panel is cut at num_genes.
+        self.panel_genes = self._resolve_genes(gene_type, num_genes, num_genes, ref_data_dir, None)
         self.anchor_idx = self._resolve_anchor_idx()
 
     # ---------------------------------------------------------------- anchors
