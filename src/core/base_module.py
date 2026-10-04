@@ -288,11 +288,16 @@ class BaseModule(pl.LightningModule):
                 if len(coords) == adata_pred.n_obs:
                     adata_pred.obsm['spatial'] = np.asarray(coords)
                 else:
-                    print(
-                        f"[STPBench] WARNING: spatial coords count ({len(coords)}) "
-                        f"does not match prediction count ({adata_pred.n_obs}) for "
-                        f"{name}; skipping obsm['spatial'].",
-                        file=sys.stderr,
+                    # Not a warning: the predictions were made from a different number of spots than the
+                    # patches hold, so they are not for this slide's spots. The usual cause is an incomplete
+                    # embedding file, e.g. read while another predict() was still writing it (several
+                    # predictions of the same slide into one output_dir started without a warm-up).
+                    raise ValueError(
+                        f"{name}: {adata_pred.n_obs} predictions but {len(coords)} patch coordinates. The "
+                        f"embeddings (or patches) of this sample are incomplete or stale. Delete them under "
+                        f"the output_dir (emb/, patches/) or pass overwrite=True, and when running several "
+                        f"predictions of one slide in parallel, run one predict() first so the patches and "
+                        f"embeddings exist before the others start."
                     )
         else:
             name, genes, id2dir = self.adapter.evaluation_prediction_context(self, batch_idx)
