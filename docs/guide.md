@@ -154,6 +154,27 @@ combined form directly. `timestamps` lets you pin a specific training run
 (`{"LinearProb": "2026-05-18-12-00-00"}`) instead of the latest one; see
 [Resuming and Persisting a Run](#resuming-and-persisting-a-run).
 
+#### Where evaluation metrics are written
+
+Each evaluation of a training run is stored separately, so evaluating a run on another dataset never
+overwrites its internal metrics (the prediction directories are separated the same way):
+
+```
+logs/<train data>/<model>/<timestamp>/fold0/
+    eval/metrics.csv                          # internal evaluation (the training data's own held-out folds)
+    eval_external/<external data>/metrics.csv # one directory per external dataset
+    eval_ledger.csv                           # append-only: one row per evaluation
+```
+
+`eval/metrics.csv` stays the file `get_ckpt_path` and the result objects read for an internal run, so external
+evaluations cannot change which checkpoint is selected. `eval_ledger.csv` is never rewritten and has one row per
+evaluation: `evaluated_at, model, kind (internal|external), eval_data, train_data, fold, train_run, checkpoint,
+n_genes, n_samples, test_PearsonCorrCoef, test_MeanAbsoluteError, metrics_path`. `n_genes` is the number of genes the
+metrics were computed over -- for an external dataset that is the overlap with the training gene panel, which is
+needed to read the numbers. `n_samples` is the number of evaluated samples (slides). Re-evaluating the same dataset
+replaces that dataset's `metrics.csv` but adds another ledger row. Runs evaluated before this layout existed may have
+an `eval/metrics.csv` that was overwritten by an external evaluation; the ledger only covers newer evaluations.
+
 ### One-shot Benchmark
 
 ```python
@@ -280,6 +301,35 @@ to do that math yourself. If `output_dir` already has patches extracted by an
 earlier call (e.g. a prior tissue-seg run against the same slide), pass
 `overwrite=True` too, or the old patches are reused unchanged rather than
 re-cropped at the new coordinates.
+
+#### Running several predictions in parallel
+
+A WSI/asset-dir `predict()` writes everything it extracts -- `patches/`, `emb/`, `ids.csv`, and the manifests --
+into `output_dir`, and **skips patch/embedding extraction when the file already exists**. That makes the order of
+the calls matter once several of them run at the same time:
+
+- **Recommended: warm up once, then fan out.** Run one `predict()` first (any model that needs the features) so
+  the patches and embeddings exist, then start the others -- they only read the extracted files. Several models
+  can then share one `output_dir` without splitting it per model.
+
+  ```python
+  stp.predict(data="/path/to/slide.svs", output_dir="/path/to/out", train_data="ncche/xenium", models=["LinearProb"])
+  # now run these concurrently (separate processes / jobs) against the same output_dir
+  stp.predict(data="/path/to/slide.svs", output_dir="/path/to/out", train_data="ncche/xenium", models=["TRIPLEX"])
+  stp.predict(data="/path/to/slide.svs", output_dir="/path/to/out", train_data="ncche/xenium", models=["DeepSpot"])
+  ```
+
+- **Avoid starting several first-time extractions of the same slide into one `output_dir` at once.** The
+  "already exists" check does not wait for the other process to finish writing, so a model can read an
+  incomplete embedding file. This is now reported as an error (`N predictions but M patch coordinates ...`)
+  instead of a silently truncated prediction; delete `emb/`/`patches/` for that sample or pass `overwrite=True`,
+  and warm up first.
+- Predictions of the same slide into **different** `output_dir`s are independent and safe to run concurrently:
+  the auto-generated data config (`config/data/_wsi_predict/<slide>-<hash>.yaml`) is named by a hash of its
+  content, so calls that differ in `output_dir`, coordinates, ... never share one. Keep these files: `visualize()`
+  re-reads the config named in the prediction's manifest.
+- A second call on the same slide and `output_dir` with **different `coordinates`** reuses the first call's patches
+  (extraction is skipped when they exist) unless `overwrite=True` is passed.
 
 ### Visualizing a Prediction
 

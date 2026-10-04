@@ -8,6 +8,7 @@ import subprocess
 import sys
 import csv
 import hashlib
+import json
 import multiprocessing
 import platform
 import time
@@ -295,11 +296,17 @@ def _collect_run_artifacts(cfg, payload: Dict[str, Any], action: str, folds: Seq
                 "log_dir": fold_dir,
                 "checkpoints": _list_checkpoints(fold_dir),
             }
-            metrics_path = os.path.join(fold_dir, "eval", "metrics.csv")
+            # internal runs read eval/, an external evaluation its own eval_external/<data>/ (cfg.GENERAL.eval_subdir)
+            eval_dir = os.path.join(fold_dir, *cfg.GENERAL.get("eval_subdir", "eval").split("/")) if action == "evaluate" \
+                else os.path.join(fold_dir, "eval")
+            metrics_path = os.path.join(eval_dir, "metrics.csv")
             metrics = _read_last_csv_row(metrics_path)
             if metrics is not None:
                 fold_artifact["metrics_path"] = metrics_path
                 fold_artifact["metrics"] = metrics
+            ledger_path = os.path.join(fold_dir, "eval_ledger.csv")
+            if os.path.isfile(ledger_path):
+                fold_artifact["ledger_path"] = ledger_path
             pred_path = getattr(cfg.DATA, "pred_path", None)
             if pred_path:
                 fold_artifact["prediction_dir"] = os.path.join(pred_path, f"fold{fold}")
@@ -722,7 +729,7 @@ def _classify_predict_target(data: str, repo_root: str = ".") -> str:
 
 def _build_runtime_cfg(payload: Dict[str, Any]):
     from addict import Dict
-    from core import load_config
+    from core import eval_subdir, load_config
 
     repo_root = payload["repo_root"]
     action = payload["action"]
@@ -859,6 +866,11 @@ def _build_runtime_cfg(payload: Dict[str, Any]):
                 cfg.DATA.num_outputs = len(overlap["genes"])
                 cfg.DATA.gene_output_indices = overlap["indices"]
         _restrict_to_model_gene_vocab(cfg)
+        # Which evaluation this is, so its metrics are stored apart from every other one (internal: eval/,
+        # external: eval_external/<data>/ -- see core.eval_subdir) and recorded in the fold's ledger.
+        cfg.GENERAL.eval_data = payload["data"]
+        cfg.GENERAL.train_data = train_data
+        cfg.GENERAL.eval_subdir = eval_subdir(payload["data"], train_data)
         if payload["data"] == train_data:
             cfg.DATA.pred_path = f"{cfg.DATA.output_dir}/{cfg.DATA.name}/{cfg.MODEL.name}"
         else:
@@ -2276,14 +2288,14 @@ class STPred:
         raw_name = os.path.basename(abs_data.rstrip(os.sep))
         if kind == "wsi_file":
             raw_name = os.path.splitext(raw_name)[0]
-        # Named only by the slide's own basename: two predict() calls on
-        # same-named slides from different source locations sharing an
-        # output_dir will collide on this config (last predict() to run
-        # wins) — acceptable given each call regenerates it fresh anyway;
-        # keep output_dir per-slide-name if that matters for your workflow.
         safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw_name).strip("_") or "wsi_predict"
-        name = f"_wsi_predict/{safe_name}"
-        config_path = os.path.join(self.repo_root, "config", "data", f"{name}.yaml")
+        # The config's final name is `<slide>-<hash of its content>` (set once the config is built, below). The
+        # file lives in the repo and predict() re-reads it by name after patch/embedding extraction, so a name
+        # that depends on the slide alone let concurrent predict() calls on the same slide (different
+        # output_dir, ...) overwrite each other's config and silently read the wrong output_dir. Identical
+        # calls still map to the same file with identical content; calls that differ in anything the config
+        # holds (output_dir, data, coordinates, wsi_dir, overwrite, ...) never share one. The slide/sample
+        # names themselves come from ids.csv, so outputs keep their slide-only names.
 
         # Both kinds read raw input from `data` and write everything else —
         # refreshed ids.csv, freshly-extracted embeddings a chosen model
@@ -2345,6 +2357,9 @@ class STPred:
             config["preprocess"]["overwrite"] = overwrite
         if coords_path is not None:
             config["preprocess"]["coords_path"] = _abs_path(self.repo_root, coords_path)
+        digest = hashlib.sha256(json.dumps(config, sort_keys=True, default=str).encode()).hexdigest()[:8]
+        name = f"_wsi_predict/{safe_name}-{digest}"
+        config_path = os.path.join(self.repo_root, "config", "data", f"{name}.yaml")
         self._write_yaml_template(config_path, config, overwrite=True)
         return name
 

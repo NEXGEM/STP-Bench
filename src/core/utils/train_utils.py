@@ -1,3 +1,5 @@
+import csv
+import io
 import os
 import random
 import re
@@ -441,6 +443,49 @@ def run_cross_validation(cfg, dm):
     trainer.fit(model, datamodule=dm)
 
 
+EVAL_LEDGER = "eval_ledger.csv"
+_LEDGER_COLUMNS = [
+    "evaluated_at", "model", "kind", "eval_data", "train_data", "fold", "train_run", "checkpoint",
+    "n_genes", "n_samples", "test_PearsonCorrCoef", "test_MeanAbsoluteError", "metrics_path",
+]
+
+
+def eval_subdir(eval_data, train_data):
+    """Sub-directory of a fold's log dir that holds the evaluation metrics of `eval_data`.
+
+    Internal evaluation (the training data's own held-out folds) keeps the historical `eval/`, which
+    `get_ckpt_path` and the result collection read. Every external dataset gets its own
+    `eval_external/<data name>/`, so evaluating a run on another dataset can never overwrite -- or
+    change what `get_ckpt_path` selects from -- the internal metrics (the prediction directories are
+    separated the same way).
+    """
+    if not eval_data or eval_data == train_data:
+        return "eval"
+    parts = [p for p in str(eval_data).replace("\\", "/").split("/") if p not in ("", ".")]
+    if not parts or ".." in parts:
+        raise ValueError(f"Invalid evaluation data name for a log directory: {eval_data!r}")
+    return "/".join(["eval_external", *parts])
+
+
+def append_eval_ledger(fold_dir, row):
+    """Append one evaluation to `<fold_dir>/eval_ledger.csv` and return its path.
+
+    The ledger is append-only: it is never rewritten, so internal and external evaluations (and
+    re-evaluations) of the same training run stay side by side. It is per fold, so folds running in
+    parallel never write to the same file. The row is written with a single `write` call.
+    """
+    os.makedirs(fold_dir, exist_ok=True)
+    path = os.path.join(fold_dir, EVAL_LEDGER)
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=_LEDGER_COLUMNS, extrasaction="ignore", lineterminator="\n")
+    if not os.path.isfile(path) or os.path.getsize(path) == 0:
+        writer.writeheader()
+    writer.writerow(row)
+    with open(path, "a", newline="") as f:
+        f.write(buf.getvalue())
+    return path
+
+
 def run_evaluation(cfg, dm):
     """Run model evaluation on checkpoints."""
     pred_path_fold = f"{cfg.DATA.pred_path}/fold{cfg.DATA.fold}"
@@ -452,11 +497,40 @@ def run_evaluation(cfg, dm):
     # ckpt_dir = f'{log_path}/{data_name}/{model_name}/{cfg.GENERAL.timestamp}'
     ckpt_paths = get_checkpoint_paths(ckpt_dir, cfg.DATA.fold)
 
+    # Where this evaluation's metrics go: `eval/` for the training data's own folds, `eval_external/<data>/`
+    # for another dataset (set by the API from the evaluated / training data names; default = internal).
+    fold_dir = f"{log_path}/{cfg.config}/{cfg.GENERAL.timestamp}/fold{cfg.DATA.fold}"
+    subdir = cfg.GENERAL.get("eval_subdir", "eval")
     csv_logger = pl_loggers.CSVLogger(
-        save_dir=f"{log_path}/{cfg.config}/{cfg.GENERAL.timestamp}/fold{cfg.DATA.fold}/eval",
+        save_dir=f"{fold_dir}/{subdir}",
         name=f"",
         version=f""
     )
+
+    def _record(ckpt_name, outputs):
+        """Add this evaluation to the fold's ledger; never let a ledger problem fail the evaluation."""
+        try:
+            try:
+                n_samples = len(dm.test_dataset)
+            except Exception:
+                n_samples = None
+            append_eval_ledger(fold_dir, {
+                "evaluated_at": datetime.now().isoformat(timespec="seconds"),
+                "model": cfg.MODEL.get("name"),
+                "kind": "internal" if subdir == "eval" else "external",
+                "eval_data": cfg.GENERAL.get("eval_data", cfg.DATA.get("name")),
+                "train_data": cfg.GENERAL.get("train_data"),
+                "fold": cfg.DATA.fold,
+                "train_run": cfg.GENERAL.timestamp,
+                "checkpoint": ckpt_name,
+                "n_genes": cfg.DATA.get("num_outputs"),
+                "n_samples": n_samples,
+                "test_PearsonCorrCoef": outputs.get("test_PearsonCorrCoef"),
+                "test_MeanAbsoluteError": outputs.get("test_MeanAbsoluteError"),
+                "metrics_path": f"{subdir}/metrics.csv",
+            })
+        except Exception as exc:
+            _stpbench_info(f"Warning: could not write the evaluation ledger: {exc}")
 
     trainer = setup_trainer(cfg, logger=csv_logger, mode='eval')
 
@@ -507,6 +581,7 @@ def run_evaluation(cfg, dm):
 
         if best_outputs is not None:
             _print_eval_table(best_ckpt_name, best_outputs)
+            _record(best_ckpt_name, best_outputs)
 
         # Restore original save_predictions flag
         if save_pred_flag:
@@ -522,11 +597,14 @@ def run_evaluation(cfg, dm):
         model.step_epoch = step_epoch
         outputs = trainer.test(model, datamodule=dm, verbose=False)
         _print_eval_table(ckpt_name, outputs[0])
+        _record(ckpt_name, outputs[0])
 
     else:
         _stpbench_info("No checkpoint found — evaluating with the default model weights.")
         model = create_model_module(cfg)
-        trainer.test(model, datamodule=dm, verbose=False)
+        outputs = trainer.test(model, datamodule=dm, verbose=False)
+        if outputs:
+            _record("(default weights)", outputs[0])
 
 
 def run_inference(cfg):
