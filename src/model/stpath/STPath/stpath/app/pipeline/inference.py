@@ -130,9 +130,18 @@ class STPathInference:
 
         print("Return results...")
         if save_gene_names is not None:
-            gene_ids = self.tokenizer.ge_tokenizer.symbol2id(save_gene_names)
+            # symbol2id silently drops any requested gene whose symbol isn't
+            # in this tokenizer's vocabulary (e.g. an outdated HGNC symbol or
+            # a clone-based identifier), so `gene_ids` can come back shorter
+            # than `save_gene_names`. Use return_valid_positions so the
+            # var_names assigned below are exactly the genes actually kept
+            # in `pred` -- not the full requested list -- to avoid a
+            # length mismatch between the two.
+            gene_ids, valid_positions = self.tokenizer.ge_tokenizer.symbol2id(
+                save_gene_names, return_valid_positions=True
+            )
             pred = pred[:, gene_ids]
-            gene_names = save_gene_names
+            gene_names = [save_gene_names[i] for i in valid_positions]
         else:
             gene_names = self.tokenizer.ge_tokenizer.get_available_genes()  # all 38984 genes
             pred = pred[:, 2:]  # remove the pad and mask tokens

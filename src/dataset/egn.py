@@ -327,7 +327,7 @@ class EGGNDataset(STDataset):
         self.selected_files = {}
         for i in all_files:
             name = i.split('/')[-1].split('.')[0]
-            graph = torch.load(i)
+            graph = torch.load(i, weights_only=False)
             self.selected_files[name] = graph
             # self.selected_files.append(graph)
         
@@ -344,6 +344,7 @@ class SGNDataset(STDataset):
                 data_dir: str,
                 meta_dir: str = None,
                 ref_data_dir: str = None,
+                genes_override: list = None,
                 gene_type: str = 'mean',
                 num_genes: int = 1000,
                 num_outputs: int = 300,
@@ -361,6 +362,7 @@ class SGNDataset(STDataset):
                                 data_dir=data_dir,
                                 meta_dir=meta_dir,
                                 ref_data_dir=ref_data_dir,
+                                genes_override=genes_override,
                                 gene_type=gene_type,
                                 num_genes=num_genes,
                                 num_outputs=num_outputs,
@@ -371,6 +373,29 @@ class SGNDataset(STDataset):
                                 model_name=model_name,
                                 load_level=load_level
                                 )
+
+        # The precomputed graph files store `window.y` at the model's full
+        # training-panel width (num_genes), in that panel's own gene order --
+        # the same order/indices the model's own logits come out in (see
+        # SGN.forward's weight_generator, keyed by the same panel). External
+        # eval requesting a gene subset (genes_override) must select the
+        # matching columns out of that fixed-width label by exact gene name,
+        # so the sliced label lines up with the already-sliced prediction.
+        gene_indices = None
+        if genes_override is not None:
+            panel_dir = ref_data_dir or meta_dir or data_dir
+            panel_path = f"{panel_dir}/{gene_type}_{num_genes}genes.json"
+            if not os.path.isfile(panel_path):
+                raise ValueError(f"{gene_type}_{num_genes}genes.json is not found in {panel_dir}")
+            with open(panel_path, 'r') as f:
+                panel_genes = json.load(f)['genes'][:num_genes]
+            panel_index = {gene: i for i, gene in enumerate(panel_genes)}
+            missing = [g for g in genes_override if g not in panel_index]
+            if missing:
+                raise ValueError(
+                    f"genes_override genes not found in training panel {panel_path}: {missing[:5]}"
+                )
+            gene_indices = torch.as_tensor([panel_index[g] for g in genes_override], dtype=torch.long)
 
         if cpm:
             if ref_data_dir is not None:
@@ -388,10 +413,22 @@ class SGNDataset(STDataset):
         self.selected_files = {}
         for i in all_files:
             name = i.split('/')[-1].split('.')[0]
-            graph = torch.load(i)
+            graph = torch.load(i, weights_only=False)
+            if gene_indices is not None:
+                y_dim = graph['window'].y.shape[-1]
+                if y_dim == len(panel_genes):
+                    graph['window'].y = graph['window'].y.index_select(-1, gene_indices)
+                elif y_dim != len(genes_override):
+                    # A graph built on an external dataset that lacks some training-panel
+                    # genes already carries exactly the shared genes (== genes_override);
+                    # anything else means the graph and the panel disagree.
+                    raise ValueError(
+                        f"{name}: graph y has {y_dim} genes, matching neither the training "
+                        f"panel ({len(panel_genes)}) nor genes_override ({len(genes_override)})"
+                    )
             self.selected_files[name] = graph
             # self.selected_files.append(graph)
-        
+
     def __getitem__(self, index):
         name = self.int2id[index] if self.mode != 'inference' else self.name
-        return self.selected_files[name]   
+        return self.selected_files[name]

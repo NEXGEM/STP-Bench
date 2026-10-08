@@ -78,8 +78,8 @@ class UNIViTBranch(nn.Module):
 
         try:
             state_dict = torch.load(weights_path, map_location="cpu", weights_only=True)
-        except TypeError:
-            state_dict = torch.load(weights_path, map_location="cpu")
+        except (TypeError, __import__("pickle").UnpicklingError):
+            state_dict = torch.load(weights_path, map_location="cpu", weights_only=False)
 
         if isinstance(state_dict, dict) and "state_dict" in state_dict:
             state_dict = state_dict["state_dict"]

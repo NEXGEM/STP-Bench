@@ -119,7 +119,7 @@ class SepalDataset(STDataset):
         path = f"{self.graph_dir}/{name}.pt"
         
         if os.path.isfile(path):
-            graph_dict = torch.load(path)
+            graph_dict = torch.load(path, weights_only=False)
             graph_data = list(graph_dict.values())
             return graph_data
         else:

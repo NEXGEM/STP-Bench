@@ -9,6 +9,21 @@ from typing import Union
 from scipy.sparse import issparse
 import torch
 
+# The OmiCLIP/Loki checkpoint (WangGuangyuLab/Loki, downloaded via
+# huggingface_hub) predates PyTorch 2.6's default `weights_only=True` in
+# torch.load -- open_clip's load_checkpoint() calls torch.load() without
+# weights_only=False, so on newer torch this fails unpickling a legacy
+# numpy internal type the checkpoint contains. add_safe_globals doesn't
+# reliably match here (numpy's own numpy.core -> numpy._core rename makes
+# the allowlisted callable's reported module path not match what the
+# pickle asks for), so fall back to forcing weights_only=False for this
+# one trusted, known-source checkpoint -- scoped to this subprocess only.
+_orig_torch_load = torch.load
+def _torch_load_trusted(*args, **kwargs):
+    kwargs.setdefault("weights_only", False)
+    return _orig_torch_load(*args, **kwargs)
+torch.load = _torch_load_trusted
+
 try:
     from loki.utils import load_model, encode_images_from_h5, encode_text_df
     from loki.preprocess import generate_gene_df

@@ -880,6 +880,16 @@ def _build_runtime_cfg(payload: Dict[str, Any]):
         cfg.GENERAL.log_dir = os.path.join(log_dir_parent, timestamp)
         saved_cfg_path = os.path.join(cfg.GENERAL.log_dir, "config.yaml")
         train_meta_dir_from_ckpt = None
+        if not os.path.exists(saved_cfg_path) and payload.get("train_data_config"):
+            # skip_train models (zero-shot, e.g. DeepSpotM/STPath) never run
+            # train() and so never write a <log_dir>/config.yaml snapshot to
+            # recover the training dataset's own meta_dir from. Without
+            # this, external eval falls through to the eval/holdout
+            # dataset's own (different) meta_dir, which has no gene panel
+            # file of its own -- fall back to the train dataset's own data
+            # config directly.
+            train_cfg = load_config(payload["train_data_config"])
+            train_meta_dir_from_ckpt = train_cfg.DATA.get("meta_dir", train_cfg.DATA.data_dir)
         if os.path.exists(saved_cfg_path):
             current_data = cfg.DATA
             cfg = load_config(saved_cfg_path)

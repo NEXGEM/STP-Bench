@@ -352,7 +352,7 @@ class contrastiveModel(nn.Module):
             pretrained_ae = autoEncoder(self.ae_encoder_dims, self.ae_act)
             
             # Load weights
-            pretrained_ae.load_state_dict(torch.load(self.ae_pretrained_path))
+            pretrained_ae.load_state_dict(torch.load(self.ae_pretrained_path, weights_only=False))
             
             # Split autoencoder in pretrained encoder and decoder
             pretrained_encoder = pretrained_ae.encoder
@@ -365,7 +365,7 @@ class contrastiveModel(nn.Module):
     def load_img_encoder(self, path, freeze = False):
 
         base_stnet = STNet(self.img_backbone, self.img_use_pretrained, self.ae_encoder_dims[0])
-        base_stnet.load_state_dict(torch.load(path))
+        base_stnet.load_state_dict(torch.load(path, weights_only=False))
         # FIXME: The change of the last layer will only work for densenet 121
         num_ftrs = base_stnet.encoder.encoder.classifier.in_features
         base_stnet.encoder.encoder.classifier = nn.Linear(num_ftrs, self.ae_encoder_dims[-1])
