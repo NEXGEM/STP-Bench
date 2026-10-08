@@ -152,7 +152,18 @@ class TRIPLEX(nn.Module):
                                             dropout1)    
         
         self.fc = nn.Linear(emb_dim, num_genes)
-        
+
+        # Global tokens of the last slide seen at inference (see `_global_token`).
+        self._global_cache = None
+
+    def train(self, mode=True):
+        self._global_cache = None  # weights change while training: a cached token would be stale
+        return super().train(mode)
+
+    def load_state_dict(self, *args, **kwargs):
+        self._global_cache = None
+        return super().load_state_dict(*args, **kwargs)
+
     def forward(self,
                 img, 
                 mask, 
@@ -235,6 +246,25 @@ class TRIPLEX(nn.Module):
         
         return target_token
         
+    def _global_token(self, global_emb, position):
+        """Global encoder over a whole slide, computed once per slide at inference.
+
+        `predict()` hands the model the same whole-slide `global_emb`/`position` with every batch of spots (and
+        `_process_inference_batch` calls `encode_global` once per chunk), so without a cache the global encoder
+        (attention over all N spots) runs once per batch: O(N^2 / batch) per slide. The token depends only on the slide
+        and the weights, so the last slide's token is reused. The cache is keyed on the inputs' content (shape +
+        checksums), not on tensor identity, because the adapter re-creates the tensors for every batch; it is dropped
+        whenever the weights can change (`train()`, `load_state_dict()`), and is used only in eval mode without autograd.
+        """
+        if self.training or torch.is_grad_enabled():
+            return self.global_encoder(global_emb, position).squeeze()
+        key = (tuple(global_emb.shape), tuple(position.shape), global_emb.device,
+               float(global_emb.double().sum()), float(global_emb.double().abs().sum()),
+               float(position.double().sum()), float(position.double().abs().sum()))
+        if self._global_cache is None or self._global_cache[0] != key:
+            self._global_cache = (key, self.global_encoder(global_emb, position).squeeze())
+        return self._global_cache[1]
+
     def encode_global(self, global_emb, position, pid=None, sid=None):
         # Global tokens
         if isinstance(global_emb, dict):
@@ -248,7 +278,7 @@ class TRIPLEX(nn.Module):
                 global_token[batch_idx] = g_token[sid[batch_idx]] # B x D
         else:
             # global_emb = self.global_layer(global_emb) # B x D
-            global_token = self.global_encoder(global_emb, position).squeeze()  # N x 512
+            global_token = self._global_token(global_emb, position)  # N x 512
             if sid is not None:
                 global_token = global_token[sid]
                 

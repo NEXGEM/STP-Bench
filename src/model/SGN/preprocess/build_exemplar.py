@@ -32,6 +32,7 @@ def main(
     meta_dir=None,
     distance_metric='l1',
     external_dir=None,
+    external_meta_dir=None,
     model_name='uni_v2',
     fold_idx=None,
     asset_dir=None,
@@ -41,11 +42,17 @@ def main(
     meta_dir = meta_dir or data_dir
     asset_dir = asset_dir or data_dir
     external_asset_dir = external_asset_dir or external_dir
+    external_meta_dir = external_meta_dir or external_dir
     emb_dir = f"{asset_dir}/emb/global/features_{model_name}"
     num_fold = _num_folds(meta_dir)
 
     if external_dir is not None:
-        train_data = '/'.join(data_dir.replace('/bench_data', '').split('/')[-2:])
+        # Namespace by the training run's own meta_dir, matching EGNDataset's
+        # own `ref_data` derivation -- deriving this from data_dir instead
+        # breaks whenever data_dir is a root shared across every dataset
+        # (the documented convention), since its last two path components
+        # no longer identify the training dataset.
+        train_data = '/'.join(meta_dir.replace('/bench_data', '').split('/')[-2:])
         ext_emb_dir = f"{external_asset_dir}/emb/global/features_{model_name}"
         save_dir = f"{external_asset_dir}/exemplar/{model_name}/{distance_metric}/{train_data}"
     else:
@@ -63,7 +70,7 @@ def main(
         if external_dir is None:
             test_dataset = _read_ids(meta_dir, "test", fold)
         else:
-            test_dataset = pd.read_csv(os.path.join(external_dir, "ids.csv"))
+            test_dataset = pd.read_csv(os.path.join(external_meta_dir, "ids.csv"))
 
         train_names = train_dataset["sample_id"].tolist()
         train_embs = []
@@ -192,6 +199,7 @@ if __name__ == "__main__":
     parser.add_argument("--asset_dir", type=str, default=None)
     parser.add_argument("--meta_dir", type=str, default=None)
     parser.add_argument("--external_asset_dir", type=str, default=None)
+    parser.add_argument("--external_meta_dir", type=str, default=None, help="Meta directory (ids.csv) for external data")
     parser.add_argument("--model_name", type=str, default='uni_v2')
     parser.add_argument("--fold_idx", type=int, default=None)
     parser.add_argument("--overwrite", action='store_true', default=False)
@@ -202,6 +210,7 @@ if __name__ == "__main__":
         meta_dir=args.meta_dir,
         distance_metric=args.distance_metric,
         external_dir=args.external_dir,
+        external_meta_dir=args.external_meta_dir,
         model_name=args.model_name,
         fold_idx=args.fold_idx,
         asset_dir=args.asset_dir,

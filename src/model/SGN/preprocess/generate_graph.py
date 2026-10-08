@@ -69,10 +69,12 @@ def main(
     external_asset_dir=None,
     num_edge=5,
     meta_dir=None,
+    external_meta_dir=None,
 ):
     meta_dir = meta_dir or data_dir
     asset_dir = asset_dir or data_dir
     external_asset_dir = external_asset_dir or external_dir
+    external_meta_dir = external_meta_dir or external_dir
     num_fold = _num_folds(meta_dir)
 
     for fold in range(num_fold):
@@ -96,10 +98,14 @@ def main(
                 if phase == "train":
                     continue  # skip training phase for exemplar generation
                 
-                test_split = os.path.join(external_dir, "ids.csv")
+                test_split = os.path.join(external_meta_dir, "ids.csv")
                 dataset = pd.read_csv(test_split)
-                
-                train_data = '/'.join(data_dir.replace('/bench_data', '').split('/')[-2:])
+
+                # Namespace by the training run's own meta_dir, matching
+                # EGNDataset's own `ref_data` derivation -- deriving this from
+                # data_dir instead breaks whenever data_dir is a root shared
+                # across every dataset (the documented convention).
+                train_data = '/'.join(meta_dir.replace('/bench_data', '').split('/')[-2:])
 
                 if cpm:
                     savename = f"{external_asset_dir}/SGN/cpm/{model_name}/{train_data}/fold{fold}/{phase}"
@@ -107,7 +113,7 @@ def main(
                     savename = f"{external_asset_dir}/SGN/{model_name}/{train_data}/fold{fold}/{phase}"
                 os.makedirs(savename, exist_ok=True)
                 
-                ref_data_dir = data_dir
+                ref_data_dir = meta_dir
             
             foldername = f"{savename}/graph"
             os.makedirs(foldername, exist_ok=True) 
@@ -119,6 +125,7 @@ def main(
                 fold=fold,
                 data_dir=data_dir if external_dir is None else external_dir,
                 asset_dir=asset_dir if external_dir is None else external_asset_dir,
+                meta_dir=meta_dir if external_dir is None else external_meta_dir,
                 distance_metric='l1',
                 gene_type=gene_type,
                 num_genes=num_genes,
@@ -180,6 +187,7 @@ if __name__ == "__main__":
     parser.add_argument("--overwrite", action='store_true', default=False, help="Whether to overwrite existing files")
     parser.add_argument("--fold_idx", type=int, default=None, help="If specified, only process this fold")
     parser.add_argument("--meta_dir", type=str, default=None, help="Path to the meta directory containing ids.csv with fold columns")
+    parser.add_argument("--external_meta_dir", type=str, default=None, help="Meta directory (ids.csv) for external data")
 
     args = parser.parse_args()
     data_dir = args.data_dir
@@ -204,4 +212,5 @@ if __name__ == "__main__":
         args.external_asset_dir,
         args.num_edge,
         args.meta_dir,
+        args.external_meta_dir,
     )

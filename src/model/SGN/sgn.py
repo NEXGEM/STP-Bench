@@ -137,17 +137,29 @@ class SGN(nn.Module):
             return load_pickle(os.path.join(name_feature_path, f"{alt['symbol']}.pkl"))[1][0].cpu()
 
     def load_gene_emb(self, name_feature_path):
-        gene_emb = []
-        size = []
-        for gene in self.genes:
+        # Index-aligned with self.genes: a gene whose symbol cannot be resolved (e.g. PBK, PRRC2B have a
+        # gene2name entry without 'symbol') gets a zero embedding instead of being dropped, because every
+        # other part of the model assumes exactly one embedding per gene of the trained panel.
+        gene_emb = [None] * len(self.genes)
+        size = [None] * len(self.genes)
+        for idx, gene in enumerate(self.genes):
             gene = decompose(gene) if gene.startswith("__ambiguous") else [gene]
             current_emb = [self._load_symbol_emb(j, name_feature_path) for j in gene]
             current_emb = [emb for emb in current_emb if emb is not None]
             if not current_emb:
                 continue
             # one entry per gene: ambiguous genes concatenate their symbols' embeddings
-            size.append([i.size(1) for i in current_emb])
-            gene_emb.append(torch.cat(current_emb, 1))
+            size[idx] = [i.size(1) for i in current_emb]
+            gene_emb[idx] = torch.cat(current_emb, 1)
+
+        resolved = [e for e in gene_emb if e is not None]
+        if not resolved:
+            raise RuntimeError("No gene embeddings could be resolved for any gene in the panel.")
+        for idx in range(len(gene_emb)):
+            if gene_emb[idx] is None:
+                print(f"Warning: gene {self.genes[idx]} has no resolvable name feature; using a zero embedding.")
+                gene_emb[idx] = torch.zeros_like(resolved[0])
+                size[idx] = [resolved[0].size(1)]
 
         return gene_emb, size
 

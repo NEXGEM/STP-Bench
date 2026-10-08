@@ -14,12 +14,14 @@ MODEL:
     args:
       model_name: ~
       distance_metric: l1
+      external_meta_dir: ~
   - script: generate_graph.py
     args:
       num_edge: 5
       model_name: ~
       gene_type: ~
       num_genes: ~
+      external_meta_dir: ~
   adapter: graph
 DATA:
   dataset_name: SGNDataset

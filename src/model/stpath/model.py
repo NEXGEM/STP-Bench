@@ -84,6 +84,20 @@ class STPathModule(nn.Module):
         
         output = torch.clamp(torch.Tensor(pred_adata.X).to(device), min=0)
 
+        if output.shape[-1] != len(genes):
+            # STPath's pretrained gene vocabulary doesn't cover every gene in
+            # `genes` (e.g. an outdated HGNC symbol or a clone-based
+            # identifier) -- inference() already drops those from `output`.
+            # Pad them back to the full requested width (as an all-zero
+            # prediction) instead of leaving `output` narrower than every
+            # downstream consumer (this loss, and the generic test-time
+            # metrics in base_module.py) assumes it to be -- len(genes).
+            predicted = set(pred_adata.var_names)
+            full_output = output.new_zeros(output.shape[0], len(genes))
+            kept = [i for i, g in enumerate(genes) if g in predicted]
+            full_output[:, kept] = output
+            output = full_output
+
         if label is not None:
             loss = F.mse_loss(output, label)
             return {'loss': loss, 'logits': output}

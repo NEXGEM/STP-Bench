@@ -94,6 +94,17 @@ class TRIPLEXv2(nn.Module):
 
         self.fc = nn.Linear(emb_dim, num_genes)
 
+        # Global tokens of the last slide seen at inference (see `_global_token`).
+        self._global_cache = None
+
+    def train(self, mode=True):
+        self._global_cache = None  # weights change while training: a cached token would be stale
+        return super().train(mode)
+
+    def load_state_dict(self, *args, **kwargs):
+        self._global_cache = None
+        return super().load_state_dict(*args, **kwargs)
+
     def forward(self,
                 img,
                 mask,
@@ -133,7 +144,7 @@ class TRIPLEXv2(nn.Module):
 
         # The global token of every spot depends on the whole slide only, so it is computed once and
         # indexed per chunk (TRIPLEX recomputes it for every chunk; the values are the same).
-        global_token = self.encode_global(global_emb, position)  # (N, D)
+        global_token = self._global_token(global_emb, position)  # (N, D)
         index = torch.arange(img.shape[0], device=img.device) if sid is None else sid
 
         preds = []
@@ -150,6 +161,25 @@ class TRIPLEXv2(nn.Module):
         if self.non_negative_output:
             pred = F.softplus(pred)
         return {'logits': pred}
+
+    def _global_token(self, global_emb, position):
+        """`encode_global` of a whole slide, computed once per slide at inference.
+
+        `predict()` hands the model the same whole-slide `global_emb`/`position` with every batch of spots, so
+        without a cache the global encoder (attention over all N spots) runs once per batch: O(N^2 / batch) per
+        slide. The token depends only on the slide and the weights, so the last slide's token is reused. The cache is
+        keyed on the inputs' content (shape + checksums), not on tensor identity, because the adapter re-creates the
+        tensors for every batch; it is dropped whenever the weights can change (`train()`, `load_state_dict()`), and is
+        used only in eval mode without autograd.
+        """
+        if self.training or torch.is_grad_enabled():
+            return self.encode_global(global_emb, position)
+        key = (tuple(global_emb.shape), tuple(position.shape), global_emb.device,
+               float(global_emb.double().sum()), float(global_emb.double().abs().sum()),
+               float(position.double().sum()), float(position.double().abs().sum()))
+        if self._global_cache is None or self._global_cache[0] != key:
+            self._global_cache = (key, self.encode_global(global_emb, position))
+        return self._global_cache[1]
 
     def encode_target(self, img):
         return self.target_linear(self.uni(img))  # B x 256 x emb_dim

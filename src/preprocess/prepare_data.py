@@ -59,7 +59,36 @@ def _read_mpp_um(hest_dir, sample_id):
     return None
 
 
+def _clamp_qc_metrics_percent_top():
+    """HESTData.__init__ (inside the hest package, called lazily while
+    _iter_hest()'s result is iterated -- not when iter_hest() itself is
+    invoked) always calls sc.pp.calculate_qc_metrics(adata) with scanpy's
+    default percent_top=(50, 100, 200, 500). Any targeted gene panel with
+    fewer than 500 genes (small Xenium panels in particular -- e.g. a
+    422- or 280-gene panel) makes scanpy raise "IndexError: Positions
+    outside range of features." for every single sample. Patch
+    calculate_qc_metrics process-wide (once) to drop percent_top values
+    that don't fit the panel being processed; for every panel already >=500
+    genes this is a no-op, so existing datasets are unaffected.
+    """
+    if getattr(sc.pp.calculate_qc_metrics, '_stpbench_patched', False):
+        return
+    _orig = sc.pp.calculate_qc_metrics
+
+    def _patched(adata, *a, **kw):
+        n_vars = adata.n_vars
+        percent_top = kw.get('percent_top', (50, 100, 200, 500))
+        if percent_top:
+            percent_top = tuple(p for p in percent_top if p <= n_vars)
+        kw['percent_top'] = percent_top or None
+        return _orig(adata, *a, **kw)
+
+    _patched._stpbench_patched = True
+    sc.pp.calculate_qc_metrics = _patched
+
+
 def _iter_hest(*args, **kwargs):
+    _clamp_qc_metrics_percent_top()
     try:
         from hest import iter_hest
     except ImportError as exc:

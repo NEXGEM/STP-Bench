@@ -82,12 +82,19 @@ class HistDataset(STDataset):
             img_emb, centers = self.load_emb(self.name, emb_name='global', return_crds=True)
             # img_emb, centers = self.load_emb(self.name, idx=index, emb_name='global', return_crds=True)
             # neighbor_emb, mask = self.load_emb(self.name, emb_name='neighbor', idx=index)
-            
+
             # global_emb, centers = self.load_emb(self.name, emb_name='global', return_crds=True)
             # pos = np.load(f"{self.data_dir}/pos/{self.name}.npy")
+            # Model indexes a fixed-size (n_pos) embedding table with these
+            # values directly (see HisToGene.forward) -- raw pixel
+            # coordinates can exceed n_pos (or be negative, near a slide
+            # edge) on large/high-resolution slides and crash the CUDA
+            # embedding lookup. Use the bounded, already-rounded grid
+            # position instead (same quantity calcADJ uses below).
+            grid_pos = self.get_normalized_pos(centers, rounding_factor=20)
             data['img'] = img
             data['img_emb'] = img_emb
-            data['centers'] = centers.long()
+            data['centers'] = grid_pos
             # data['sid'] = torch.LongTensor([index])
         else:
             name = self.int2id[index]
@@ -113,7 +120,7 @@ class HistDataset(STDataset):
                 
             data['img'] = img
             data['img_emb'] = img_emb
-            data['centers'] = centers.long()
+            data['centers'] = grid_pos
             data['adj'] = adj
             data['oris'] = oris
             data['sfs'] = sfs

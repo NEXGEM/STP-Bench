@@ -71,10 +71,15 @@ class BrSTNetDataset(STDataset):
             self.remaining_genes = list(set(total_genes) - set(self.genes))
 
         if phase == 'train':
+            # Full-panel datasets (gene_type=total, num_outputs == the whole
+            # panel) leave remaining_genes empty -- load_st(..., []) selects
+            # a 0-width adata, and normalize_adata's sc.pp.log1p raises on
+            # an empty feature axis. Skip loading in that case; __getitem__
+            # below supplies a matching (0,)-shaped aux tensor directly.
             self.adata_aux_dict = {
                 _id: self.load_st(_id, self.remaining_genes, **self.norm_param)
                 for _id in self.ids
-            }
+            } if self.remaining_genes else {}
         # norm_dir = os.path.join(self.data_dir, 'patches', 'patches_norm')
         # if os.path.isdir(norm_dir):
         #     self.img_dir = norm_dir
@@ -115,11 +120,14 @@ class BrSTNetDataset(STDataset):
             expression = expression.toarray().squeeze(0) \
                 if sparse.issparse(expression) else expression.squeeze(0)
             
-            adata_aux = self.adata_aux_dict[name]
-            aux = adata_aux[idx].X
-            aux = aux.toarray().squeeze(0) \
-                if sparse.issparse(aux) else aux.squeeze(0)
-            
+            if self.remaining_genes:
+                adata_aux = self.adata_aux_dict[name]
+                aux = adata_aux[idx].X
+                aux = aux.toarray().squeeze(0) \
+                    if sparse.issparse(aux) else aux.squeeze(0)
+            else:
+                aux = np.zeros((0,), dtype=np.float32)
+
             data['img'] = img
             data['img_emb'] = img_emb
             data['label'] = torch.FloatTensor(expression) 
@@ -144,8 +152,20 @@ class BrSTNetDataset(STDataset):
                     expression = adata.X.toarray() if sparse.issparse(adata.X) else adata.X
                     data['label'] = torch.FloatTensor(expression)
 
-                    adata_aux = self.load_st(name, self.remaining_genes, **self.norm_param)
-                    aux = adata_aux.X.toarray() if sparse.issparse(adata_aux.X) else adata_aux.X
+                    # Only aux genes actually present in this sample's h5ad can be
+                    # loaded -- an external/holdout set can lack some of the training
+                    # panel's genes, and load_st() on none of them yields a 0-width
+                    # adata that normalize_adata's log1p rejects.
+                    import scanpy as sc
+                    _ad = sc.read_h5ad(f"{self.st_dir}/{name}.h5ad", backed='r')
+                    _present = set(_ad.var_names)
+                    _ad.file.close()
+                    aux_genes = [g for g in self.remaining_genes if g in _present]
+                    if aux_genes:
+                        adata_aux = self.load_st(name, aux_genes, **self.norm_param)
+                        aux = adata_aux.X.toarray() if sparse.issparse(adata_aux.X) else adata_aux.X
+                    else:
+                        aux = np.zeros((expression.shape[0], 0), dtype=np.float32)
                     data['aux'] = torch.FloatTensor(aux)
             
             data['img'] = img

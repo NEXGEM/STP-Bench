@@ -134,8 +134,16 @@ class BrSTNet(nn.Module):
 
         if label is not None:
             loss_main = F.mse_loss(logits, label)
-            aux = aux.squeeze(0) if len(aux.shape) == 3 else aux
-            loss_aux  = F.mse_loss(aux_logits, aux)
+            if aux_logits.shape[-1] == 0:
+                # Full-panel datasets (gene_type=total with num_outputs equal
+                # to the whole panel, e.g. small Xenium gene lists) leave no
+                # "remaining" genes for the auxiliary target -- aux_logits is
+                # (N, 0) and F.mse_loss on an empty tensor returns NaN, which
+                # would poison loss_main too via the sum below.
+                loss_aux = logits.new_zeros(())
+            else:
+                aux = aux.squeeze(0) if len(aux.shape) == 3 else aux
+                loss_aux = F.mse_loss(aux_logits, aux)
             result_dict['aux_loss'] = loss_aux
             result_dict['loss']     = loss_main + self.aux_weight * loss_aux
 
