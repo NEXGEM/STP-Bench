@@ -138,12 +138,7 @@ class EGNDataset(STDataset):
                 window = img.shape[-1]
                 pos = coord // window
                 
-                with h5py.File(f"{self.exemplar_dir}/{self.name}.h5", 'r') as f:
-                    pid = f['pid'][:].astype('str')
-                    sid = f['sid'][:]
-                    
-                pid_i = pid[index]
-                sid_i = sid[index]
+                pid_i, sid_i = self._exemplar_row(self.name, index)
                 img_exemplars, exp_exemplars = self.get_exemplars(pid_i, sid_i)
                 
             else:
@@ -166,12 +161,7 @@ class EGNDataset(STDataset):
                 # global_embs = self.global_embs[name]
                 global_emb = self.load_emb(name, idx=idx)
                 
-                with h5py.File(f"{self.exemplar_dir}/{name}.h5", 'r') as f:
-                    pid = f['pid'][:].astype('str')
-                    sid = f['sid'][:]
-                
-                pid_i = pid[idx]
-                sid_i = sid[idx]
+                pid_i, sid_i = self._exemplar_row(name, idx)
                 img_exemplars, exp_exemplars = self.get_exemplars(pid_i, sid_i)
                 
                 data['label'] = torch.FloatTensor(expression) 
@@ -235,6 +225,12 @@ class EGNDataset(STDataset):
             
         return data
     
+    def _exemplar_row(self, name, idx):
+        """Exemplar (pid, sid) of one patch. Reads just that row of the slide's table instead
+        of the whole (N, 100) arrays, which made patch-level loading O(N^2) per slide."""
+        with h5py.File(f"{self.exemplar_dir}/{name}.h5", 'r') as f:
+            return f['pid'][idx].astype('str'), f['sid'][idx]
+
     def get_exemplars(self, pid_i, sid_i, num_exemplars=None):
         num_exemplars = num_exemplars or self.num_exemplars
         pid_i = pid_i[:num_exemplars]

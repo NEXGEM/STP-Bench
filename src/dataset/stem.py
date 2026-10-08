@@ -49,6 +49,13 @@ class StemDataset(STDataset):
                                 load_level=load_level
                                 )
 
+        # Stem predicts a whole slide per call (its test branches return every spot's embedding
+        # at once). STDataset only forces slide level for cv-test/eval, so an inference dataset
+        # configured with load_level='patch' would hand back the full slide once per patch:
+        # N slide-sized batches, N x N predictions.
+        if mode == 'inference':
+            self.load_level = 'slide'
+
         # Base directories for embeddings
         self.emb_dir = emb_dir(data_dir)
         # self.uni_emb_dir = f"{emb_dir}/global/uni_v2"

@@ -102,6 +102,10 @@ class BleepDataset(STDataset):
             self.ref_asset_dir = ref_asset_dir if ref_data_dir is not None else data_dir
             self.fold = fold
 
+        # per-slide cache: normalized grid positions (kept for every slide seen) and, in
+        # inference, the embeddings of the current slide only.
+        self._slide_cache = {}
+
         if mode == 'inference':
             self.ids = ids
             self.int2id = dict(enumerate(self.ids))
@@ -123,10 +127,8 @@ class BleepDataset(STDataset):
             img = self.load_img(name, idx)
             img = self.transforms(img)
             
-            img_emb, pos = self.load_emb(name, emb_name='global', return_crds=True)
-            img_emb = img_emb[idx]
-            grid_pos = self.get_normalized_pos(pos, rounding_factor=20)
-            grid_pos = grid_pos[idx]
+            img_emb = self.load_emb(name, emb_name='global', idx=idx)
+            grid_pos = self._slide(name)[1][idx]
             
             adata = self.adata_dict[name]
             expression = adata[idx].X
@@ -144,9 +146,8 @@ class BleepDataset(STDataset):
                 img = self.load_img(self.name, idx=index)
                 img = self.transforms(img)
                 # neighbor_emb, mask = self.load_emb(self.name, emb_name='neighbor', idx=index)
-                img_emb, pos = self.load_emb(self.name, emb_name='global', return_crds=True)
+                img_emb, grid_pos = self._slide(self.name)
                 img_emb = img_emb[index]
-                grid_pos = self.get_normalized_pos(pos, rounding_factor=20)
                 grid_pos = grid_pos[index]
                 # pos = np.load(f"{self.data_dir}/pos/{self.name}.npy")
                 
@@ -182,6 +183,26 @@ class BleepDataset(STDataset):
             
         return data
     
+    def _slide(self, name):
+        """(global embeddings or None, normalized grid positions) of a slide, computed once.
+
+        Reading the whole slide's embeddings/coordinates and re-deriving the grid for every
+        patch made loading O(N^2) per slide. Positions are small and cached for all slides;
+        embeddings are cached only in inference (patches arrive slide by slide), and only
+        for the current slide to bound memory. Training reads its row directly.
+        """
+        hit = self._slide_cache.get(name)
+        if hit is None:
+            emb, pos = self.load_emb(name, emb_name='global', return_crds=True)
+            grid_pos = self.get_normalized_pos(pos, rounding_factor=20)
+            if self.mode == 'inference':
+                self._slide_cache.clear()
+                hit = (emb, grid_pos)
+            else:
+                hit = (None, grid_pos)
+            self._slide_cache[name] = hit
+        return hit
+
     def get_normalized_pos(self, pos, rounding_factor=None):
         W,H = self.infer_grid_size(pos, rounding_factor=rounding_factor)
 
