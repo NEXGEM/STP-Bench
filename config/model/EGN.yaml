@@ -10,3 +10,4 @@ MODEL:
   adapter: egn
 DATA:
   dataset_name: EGNDataset
+  num_exemplars: 6

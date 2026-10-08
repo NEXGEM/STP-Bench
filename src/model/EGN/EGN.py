@@ -2,7 +2,6 @@
 import os
 import numpy as np
 
-from scipy.stats import pearsonr
 import torch
 from torch import nn
 from einops import rearrange
@@ -158,11 +157,11 @@ class Update(nn.Module):
             )
         
         self.value = nn.Linear(dim, dim)
-        # self.norm = nn.LayerNorm(dim)        
+        self.norm = nn.LayerNorm(dim)        
     def forward(self,q,k,v):
         value = self.value(v)
         query, key = self.query(torch.cat((q-k,k),2)).chunk(2,2)        
-        return (query.sigmoid() * value).mean(1,True) + q, key.sigmoid() * value + k
+        return (query.sigmoid() * value).mean(1,True) + q, self.norm(key.sigmoid() * value + k)
     
 class EB(nn.Module):
     def __init__(self, dim, heads = 8, dim_head = 64, dropout = 0.):
@@ -226,11 +225,6 @@ class EGN(nn.Module):
                 max_batch_size = 1024, non_negative_output: bool = True):
         super().__init__()
 
-        if mdim > 1536:
-            self.exem_mapping = nn.Linear(mdim, 1536)
-            self.target_mapping = nn.Linear(mdim, 1536)
-            mdim = 1536
-        
         self.dim = dim
         self.max_batch_size = max_batch_size
         self.non_negative_output = non_negative_output
@@ -261,10 +255,6 @@ class EGN(nn.Module):
             
     def forward(self, img, ei, ej, yj, label=None, **kwargs):
         phase = kwargs.get('phase', 'train')
-
-        ei = self.target_mapping(ei) if getattr(self, 'target_mapping', None) else ei
-        ej = self.exem_mapping(ej) if getattr(self, 'exem_mapping', None) else ej
-        
 
         if phase == 'train':
             output = self._forward_single(img, ei, ej, yj)
