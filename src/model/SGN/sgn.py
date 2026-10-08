@@ -28,16 +28,19 @@ def load_pickle(name):
     return file
 
 
+def pearson_R(x, y):
+    xm = x - x.mean()
+    ym = y - y.mean()
+    r_val = xm.dot(ym) / (torch.norm(xm, 2) * torch.norm(ym, 2) + 1e-8)
+    return torch.nan_to_num(r_val, nan=-1)
+
+
 class SGN(nn.Module):
     def __init__(self, hidden_channels, embed_dim, out_channels, 
                  num_layers = 4, feature_dim=1536, name_dim=4096,
                  gene_path=None, gene2name_path='./preprocess', name_feature_path=None,
                  non_negative_output: bool = True):
         super().__init__()
-
-        if embed_dim > 1536:
-            self.mapping = nn.Linear(embed_dim, 1536)
-            embed_dim = 1536
 
         # self.gene = np.array(load_pickle(f"{gene_path}/gene.pkl"))
         # self.gene = np.array(load_pickle(f"{gene_path}/gene.pkl"))
@@ -75,8 +78,7 @@ class SGN(nn.Module):
         label = data["window"].y
         device = x_dict["window"].device
 
-        window = self.mapping(x_dict["window"]) if getattr(self, 'mapping', None) else x_dict["window"]
-        x_dict["window"]  = self.pretransform(window)
+        x_dict["window"]  = self.pretransform(x_dict["window"])
         for conv in self.convs:
             x_dict = conv(x_dict, edge_index_dict)
             x_dict = {key: self.leaklyrelu(x) for key, x in x_dict.items()}
@@ -91,67 +93,61 @@ class SGN(nn.Module):
         result_dict = {'logits': pred}
         if phase == 'train':
             loss = F.mse_loss(pred, label)
-            result_dict['loss'] = loss
+            corrloss = self.correlationMetric(pred, label)
+            result_dict['loss'] = loss + corrloss * 0.5
         
         return result_dict
-    
+
+    def correlationMetric(self, x, y):
+        corr = 0
+        for idx in range(x.size(1)):
+            corr += pearson_R(x[:, idx], y[:, idx])
+        corr /= (idx + 1)
+        return (1 - corr).mean()
+
+    def _gene_entry(self, name):
+        """gene2name entry for `name`, falling back to the HGNC-approved symbol."""
+        if name in self.gene2name:
+            return self.gene2name[name]
+        mapped = self._hgnc_symbol(name)
+        if mapped is not None and mapped in self.gene2name:
+            return self.gene2name[mapped]
+        return None
+
+    def _hgnc_symbol(self, name):
+        hit = self.gene_mapping.loc[self.gene_mapping['Input'] == name, 'Approved symbol'].values
+        return hit[0] if len(hit) else None
+
+    def _load_symbol_emb(self, name, name_feature_path):
+        entry = self._gene_entry(name)
+        if entry is None:
+            print(f"Warning: Gene {name} not found in gene2name mapping. Skipping...")
+            return None
+        if 'symbol' not in entry:
+            print(f"Warning: No symbol found for gene {name}.")
+            return None
+        try:
+            return load_pickle(os.path.join(name_feature_path, f"{entry['symbol']}.pkl"))[1][0].cpu()
+        except FileNotFoundError:
+            # retry with the HGNC-approved symbol before giving up
+            mapped = self._hgnc_symbol(name)
+            alt = self.gene2name.get(mapped) if mapped is not None else None
+            if alt is None or 'symbol' not in alt or alt['symbol'] == entry['symbol']:
+                raise FileNotFoundError(f"Gene {name} not found in {name_feature_path}. Please check the path and ensure all gene embeddings are available.")
+            return load_pickle(os.path.join(name_feature_path, f"{alt['symbol']}.pkl"))[1][0].cpu()
+
     def load_gene_emb(self, name_feature_path):
-        if hasattr(self,"gene_emb"):
-            return self.gene_emb, self.test_mask, self.size 
-        
         gene_emb = []
         size = []
         for gene in self.genes:
             gene = decompose(gene) if gene.startswith("__ambiguous") else [gene]
-            current_emb = []
-            
-            try:
-                for j in gene:
-                    if j in self.gene2name:
-                        symbol = self.gene2name[j]
-                    else:
-                        if j in self.gene_mapping['Input'].values:
-                            gene_mapped = self.gene_mapping.loc[self.gene_mapping['Input'] == j, 'Approved symbol'].values[0]
-                            if gene_mapped in self.gene2name:
-                                symbol = self.gene2name[gene_mapped]
-                            else:
-                                print(f"Warning: Mapped gene {gene_mapped} for input {j} not found in gene2name mapping. Skipping...")
-                                continue
-                        else:
-                            print(f"Warning: Gene {j} not found in gene2name mapping. Skipping...")
-                            continue
-                    if 'symbol' in symbol:
-                        symbol = symbol['symbol']
-                        current_emb.append(load_pickle(os.path.join(name_feature_path,f"{symbol}.pkl"))[1][0].cpu())
-                        
-                        size.append([i.size(1) for i in current_emb])
-                        gene_emb.append(torch.cat(current_emb,1))
-                    else:
-                        print(f"Warning: No symbol found for gene {j}.")
-                    
-                    
-            except FileNotFoundError:
-                for j in gene:
-                    if j in self.gene_mapping['Input'].values:
-                        gene_mapped = self.gene_mapping.loc[self.gene_mapping['Input'] == j, 'Approved symbol'].values[0]
-                        
-                        if gene_mapped in self.gene2name:
-                            symbol = self.gene2name[gene_mapped]
-                        else:
-                            print(f"Warning: Gene {j} not found in gene2name mapping. Skipping...")
-                            continue
-                        if 'symbol' in symbol:
-                            symbol = symbol['symbol']
-                            current_emb.append(load_pickle(os.path.join(name_feature_path,f"{symbol}.pkl"))[1][0].cpu())
-                            
-                            size.append([i.size(1) for i in current_emb])
-                            gene_emb.append(torch.cat(current_emb,1))
-                        else:
-                            print(f"Warning: No symbol found for gene {j}.")
-                    else:
-                        raise FileNotFoundError(f"Gene {gene} not found in {name_feature_path}. Please check the path and ensure all gene embeddings are available.")
-                # print(f"Gene {gene} not found in {name_feature_path}. Skipping...")
-                # continue
+            current_emb = [self._load_symbol_emb(j, name_feature_path) for j in gene]
+            current_emb = [emb for emb in current_emb if emb is not None]
+            if not current_emb:
+                continue
+            # one entry per gene: ambiguous genes concatenate their symbols' embeddings
+            size.append([i.size(1) for i in current_emb])
+            gene_emb.append(torch.cat(current_emb, 1))
 
         return gene_emb, size
 

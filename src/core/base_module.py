@@ -44,7 +44,14 @@ class BaseModule(pl.LightningModule):
         metrics = torchmetrics.MetricCollection([PearsonCorrCoef(num_outputs = num_outputs),
                                                 MeanAbsoluteError(num_outputs = num_outputs)
                                                 ])
-        self.test_metrics = metrics.clone(prefix = 'test_')        
+        self.test_metrics = metrics.clone(prefix = 'test_')
+        # Validation may score fewer columns than the full output panel (see
+        # ModelAdapter.val_num_outputs); the default keeps the same collection as before.
+        val_outputs = self.adapter.val_num_outputs(self.config)
+        if val_outputs != num_outputs:
+            metrics = torchmetrics.MetricCollection([PearsonCorrCoef(num_outputs = val_outputs),
+                                                    MeanAbsoluteError(num_outputs = val_outputs)
+                                                    ])
         if target:
             metrics['target'] = metrics.pop(target)
             idx_target = {v[0]: k for k,v in metrics.compute_groups.items()}[target]

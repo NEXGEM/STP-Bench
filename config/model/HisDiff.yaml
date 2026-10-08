@@ -1,0 +1,24 @@
+# HisDiff: conditional diffusion over gene tokens (DiT, as in Stem) conditioned on a spot's embedding plus
+# the embeddings of its 9 / 49 nearest spots (cross-attention). https://github.com/wenwenmin/HisDiff
+# DATA.model_name picks the frozen patch encoder (uni_v2, the benchmark default) and is shared with the
+# other models, so a PearsonCorrCoef difference reflects the architecture. The reference uses UNI v1
+# (1024-d); label_size must equal the encoder's embedding width.
+MODEL:
+  model_name: hisdiff.HisDiff
+  hidden_size: 384
+  depth: 12
+  num_heads: 12
+  mlp_ratio: 4.0
+  label_size: 1536            # embedding width of DATA.model_name (uni_v2)
+  learn_sigma: true
+  max_batch_size: 1024        # spots sampled per chunk at val/test
+  adapter: hisdiff
+DATA:
+  dataset_name: HisDiffDataset
+  num_neighbors: 9
+  num_global: 49
+  train_dataloader:
+    batch_size: 128
+TRAINING:
+  mode: max
+  save_best_only: true

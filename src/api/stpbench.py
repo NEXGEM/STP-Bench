@@ -340,7 +340,6 @@ def _run_single_model_action(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     gpu_pool = payload.get("gpu_pool")
     device = gpu_pool.get() if gpu_pool is not None else payload["gpu_id"]
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(device)
     if gpu_pool is not None:
         # Actions that use a shared pool (train/evaluate) don't rely on
         # gpu_id for anything but device selection/logging, so it's safe
@@ -349,10 +348,78 @@ def _run_single_model_action(payload: Dict[str, Any]) -> Dict[str, Any]:
         # of the pre-acquisition round-robin guess.
         payload["gpu_id"] = device
     try:
+        if _cuda_pinned_elsewhere(device):
+            return _run_in_fresh_process(payload)
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(device)
         return _run_single_model_action_impl(payload)
     finally:
         if gpu_pool is not None:
             gpu_pool.put(device)
+
+
+_FRESH_WORKER_ENV = "STPBENCH_FRESH_GPU_WORKER"
+
+_FRESH_WORKER_SCRIPT = (
+    "import pickle, sys, traceback\n"
+    "in_path, out_path = sys.argv[1:3]\n"
+    "job = pickle.load(open(in_path, 'rb'))\n"
+    "sys.path[:0] = job['sys_path']\n"
+    "from api.stpbench import _run_single_model_action\n"
+    "try:\n"
+    "    out = ('ok', _run_single_model_action(job['payload']))\n"
+    "except BaseException:\n"
+    "    out = ('error', traceback.format_exc())\n"
+    "pickle.dump(out, open(out_path, 'wb'))\n"
+)
+
+
+def _cuda_pinned_elsewhere(device) -> bool:
+    """True when this process already created a CUDA context that can't be re-pinned to `device`.
+
+    CUDA_VISIBLE_DEVICES is only read when the CUDA context is created, so setting it
+    afterwards (e.g. the caller touched CUDA, or an earlier STPred call in the same process
+    pinned another GPU) is silently ignored and the job lands on whichever GPU the process
+    got first — physical GPU 0 by default.
+    """
+    if os.environ.get(_FRESH_WORKER_ENV):
+        return False  # already the dedicated worker; nothing further to try
+    torch = sys.modules.get("torch")
+    if torch is None or not torch.cuda.is_initialized():
+        return False
+    return os.environ.get("CUDA_VISIBLE_DEVICES") != str(device)
+
+
+def _run_in_fresh_process(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Run the action in a new interpreter that starts with CUDA_VISIBLE_DEVICES already set.
+
+    A plain subprocess rather than multiprocessing's spawn: spawn re-imports the caller's
+    __main__, which re-runs an unguarded driver script.
+    """
+    import pickle
+    import tempfile
+    import warnings
+
+    device = payload["gpu_id"]
+    warnings.warn(
+        f"CUDA is already initialized in this process, so GPU {device} cannot be selected "
+        "in-process; running this job in a fresh process pinned to it instead. Create STPred / "
+        "set CUDA_VISIBLE_DEVICES before touching CUDA to avoid the extra process.",
+        stacklevel=3,
+    )
+    payload = {k: v for k, v in payload.items() if k != "gpu_pool"}
+    env = {**os.environ, "CUDA_VISIBLE_DEVICES": str(device), _FRESH_WORKER_ENV: "1"}
+    with tempfile.TemporaryDirectory() as tmp:
+        in_path, out_path = os.path.join(tmp, "in.pkl"), os.path.join(tmp, "out.pkl")
+        with open(in_path, "wb") as f:
+            pickle.dump({"payload": payload, "sys_path": list(sys.path)}, f)
+        proc = subprocess.run([sys.executable, "-c", _FRESH_WORKER_SCRIPT, in_path, out_path], env=env)
+        if not os.path.isfile(out_path):
+            raise RuntimeError(f"GPU {device} worker exited with code {proc.returncode} without a result")
+        with open(out_path, "rb") as f:
+            status, value = pickle.load(f)
+    if status == "error":
+        raise RuntimeError(f"Job failed in the GPU {device} worker:\n{value}")
+    return value
 
 
 def _run_single_model_action_impl(payload: Dict[str, Any]) -> Dict[str, Any]:

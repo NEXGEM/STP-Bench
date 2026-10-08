@@ -276,7 +276,8 @@ def main(
                 ref_data_dir=ref_data_dir,
                 ref_asset_dir=asset_dir if ref_data_dir is not None else None,
                 genes_override=genes_override if ref_data_dir is not None else None,
-                load_level='slide'
+                load_level='slide',
+                num_exemplars=numk,
             )
             
             loader = torch.utils.data.DataLoader(

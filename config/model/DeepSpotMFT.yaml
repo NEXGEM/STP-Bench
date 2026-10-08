@@ -17,6 +17,9 @@ MODEL:
   repo_id_or_path: ratschlab/DeepSpotM
   source: scgpt
   device: cpu
+  # LoRA fine-tuning: a softplus on the output (before the MSE) keeps the tuned predictions non-negative, like the
+  # benchmark's other regression models. Zero-shot DeepSpotM.yaml leaves the pretrained output untouched.
+  non_negative_output: true
 DATA:
   dataset_name: DeepSpotMDataset
   feature_type: none

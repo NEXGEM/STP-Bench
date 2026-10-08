@@ -1,0 +1,40 @@
+# NH2ST (Qu et al., MICCAI 2025): query branch (target patch + expression) and neighbor branch (the 9 nearest spots,
+# hypergraph over their image features / expression), joined by cross-attention and two contrastive losses.
+# https://github.com/mcpathology/nh2st
+#
+# Image encoder: the reference's end-to-end ResNet18 is replaced by FROZEN UNI2-h run online on the target patch
+# (augmentation kept); the neighbors' image features are the cached `uni_v2` embeddings of those spots. At
+# inference only `decoder(fc(UNI(image)))` is used -- the neighbor / expression / contrastive branches shape
+# the training only (as in the reference), so no labels are read at evaluation. Frozen UNI2-h weights are not
+# saved in checkpoints.
+#
+# Differences from the reference protocol: the reference trains with Adam lr 5e-4 + StepLR(50, 0.9) and selects
+# on the mean of the 50 best genes' PCC; here the shared benchmark trainer (BaseModule optimizer, val_target =
+# mean PCC over all genes) is used. batch_size follows the reference README (the contrastive losses use in-batch
+# negatives). The decoder is linear (its ReLU is commented out upstream); `non_negative_output` (default true)
+# adds a softplus to its output, before the MSE, like the benchmark's other regression models -- the reference
+# does not, and its predictions went negative (about 0.5% of the values in a 2-epoch run).
+MODEL:
+  model_name: nh2st.NH2ST
+  emb_dim: 512
+  depth1: 1
+  num_heads1: 8
+  mlp_ratio1: 1.0
+  dropout1: 0.5
+  temperature1: 0.05
+  temperature2: 0.05
+  loss_ratio1: 1.0
+  loss_ratio2: 0.5
+  hyperedge_k: 3
+  non_negative_output: true   # softplus on the decoder output (a deviation from the reference, see above)
+  max_batch_size: 256     # spots per inference chunk (each chunk runs UNI2-h)
+  uni_weights_path: ~     # local UNI2-h pytorch_model.bin; ~ = read MahmoodLab/UNI2-h from the HuggingFace cache
+  adapter: default
+DATA:
+  dataset_name: NH2STDataset
+  feature_type: global    # extracts the uni_v2 embeddings the neighbor branch reads
+  use_emb: false
+  model_name: uni_v2
+  k_neighbors: 9
+  train_dataloader:
+    batch_size: 8

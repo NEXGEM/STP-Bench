@@ -4,7 +4,6 @@ import torch_geometric.nn as pyg
 from .geb import EGBBlock
 from .csra import CSRA
 from .heteroconv import HeteroConv
-from scipy.stats import pearsonr
 import torch.nn.functional as F
 
 '''
@@ -13,14 +12,16 @@ code is based on https://pytorch-geometric.readthedocs.io/en/latest/
 '''
 
 
+def pearson_R(x, y):
+    xm = x - x.mean()
+    ym = y - y.mean()
+    r_val = xm.dot(ym) / (torch.norm(xm, 2) * torch.norm(ym, 2) + 1e-8)
+    return torch.nan_to_num(r_val, nan=-1)
+
+
 class EGGN(torch.nn.Module):
     def __init__(self, num_layers = 4, hidden_channels=512, mdim=1536, num_genes=200, non_negative_output: bool = True):
         super().__init__()
-
-        if mdim > 1536:
-            self.window_mapping = nn.Linear(mdim, 1536)
-            self.exp_mapping = nn.Linear(mdim+num_genes, 1536)
-            mdim = 1536
 
         self.hidden_channels = hidden_channels
         self.num_genes = num_genes
@@ -52,12 +53,10 @@ class EGGN(torch.nn.Module):
         edge_index_dict = data.edge_index_dict
         label = data["window"].y
 
-        example = self.exp_mapping(x_dict["example"]) if x_dict["example"].size(1) > 1536 + self.num_genes else x_dict["example"]
-        window  = self.window_mapping(x_dict["window"]) if x_dict["window"].size(1) > 1536 else x_dict["window"]
-
+        example = x_dict["example"]  # [N, mdim + num_genes] = [image emb | exemplar expression]
+        x_dict["example_y"] = self.pretransform_ey(example[:, -self.num_genes:])
         x_dict["example"]  = self.post_transform(self.pretransform_exp(example))
-        x_dict['window'] = self.post_transform(self.pretransform_win(window))
-        x_dict["example_y"] = self.pretransform_ey(x_dict["example"][:,-self.num_genes:])
+        x_dict['window'] = self.post_transform(self.pretransform_win(x_dict["window"]))
         
         for conv in self.convs:
             x_dict = conv(x_dict, edge_index_dict)
@@ -82,8 +81,6 @@ class EGGN(torch.nn.Module):
     def correlationMetric(self, x, y):
         corr = 0
         for idx in range(x.size(1)):
-            x_np = x[:, idx].detach().cpu().numpy()
-            y_np = y[:, idx].detach().cpu().numpy()
-            corr += pearsonr(x_np, y_np)[0]  # [0] to extract the correlation value only
+            corr += pearson_R(x[:, idx], y[:, idx])
         corr /= (idx + 1)
-        return (1 - corr).mean()  # this still needs to be a torch scalar
+        return (1 - corr).mean()

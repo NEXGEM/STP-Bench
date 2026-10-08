@@ -1,0 +1,44 @@
+# BioFlow (https://github.com/hrterry/BioFLow): support-preserving flow matching, H&E embeddings -> expression.
+# Slide-level model (MMDiT jointly attends over all spots of a slide and all genes): one slide per training step,
+# inference runs the whole slide at once and is never chunked. The frozen patch encoder is DATA.model_name
+# (uni_v2 = UNI2-h, 1536-d, the benchmark default).
+#
+# `mode: paper` follows the published equations rather than the released code (the two disagree):
+#   x_t = (1-t) x0 + t x1, target x1 - x0, v_hat = -x_t/delta + softplus(u) in training AND sampling, plain Euler steps
+#   x <- x + h v_hat, no clamp. With a non-negative prior and h = 1/n_sample_steps <= delta the output is >= 0 by
+#   construction (enforced at construction). delta = 0.1, h = 0.05 (20 steps) are the paper's values.
+# `mode: released_code` reproduces the repository (target (x1-x0)/(1-t), -x_t/(1-t) + softplus(u), raw u + clamp(min=0)
+#   per step); use it with prior_sampler: gaussian and n_sample_steps: 10 (its defaults). Comparison only.
+#
+# Not stated in the paper, taken from the released defaults: ZINB parameters, hidden 128 / 4 layers / 4 heads /
+# dropout 0.2, patch distribution 'uniform' and sample_times 5 for the training-time local chunks. The prior lives in
+# log1p space like the labels. fp32 (use_amp: false) because v_hat = -x_t/delta + phi subtracts large numbers.
+GENERAL:
+  use_amp: false
+MODEL:
+  model_name: bioflow.BioFlow
+  feature_dim: 1536       # embedding width of DATA.model_name (uni_v2)
+  hidden_dim: 128
+  n_layers: 4
+  n_heads: 4
+  dropout: 0.2
+  attn_dropout: 0.2
+  prior_sampler: zinb
+  zinb_total_count: 1
+  zinb_logits: 0.1
+  zinb_zi_logits: 0
+  delta: 0.1
+  n_sample_steps: 20
+  mode: paper
+  clamp_output: false     # ablation of the released_code sampler only
+  patch_distribution: uniform
+  sample_times: 5
+  adapter: default
+DATA:
+  dataset_name: FlowDataset
+  load_level: slide
+  train_dataloader:
+    batch_size: 1
+TRAINING:
+  mode: max
+  save_best_only: true
