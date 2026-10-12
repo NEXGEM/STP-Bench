@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 import json
 import warnings
@@ -14,6 +15,7 @@ from openslide import OpenSlide
 import scanpy as sc
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from st_alignment import patch_path_for_st, read_patch_barcodes
 from core.utils.preprocess_utils import (STSample, load_st, open_slide_image, pixel_size_um,
                                           save_hdf5)
 
@@ -123,33 +125,45 @@ def _read_barcodes(f):
 
 
 def match_to_target(target_path, source_path):
-    """Align source patches to target barcodes via intersection."""
+    """Subset and reorder source patches to the target's barcode order (barcodes in both files).
+
+    The result is written to a temp copy that then replaces source_path, so an interrupted run
+    never leaves a half-rewritten patch file.
+    """
     with h5py.File(target_path, 'r') as f:
         _, barcode_target = _read_barcodes(f)
 
-    with h5py.File(source_path, 'r+') as f:
-        has_img = 'img' in f
-        source_img = f['img'][:] if has_img else None
-        crd_source = f['coords'][:]
-        coords_attrs = dict(f['coords'].attrs)
-        key, barcode_source = _read_barcodes(f)
+    tmp_path = f"{source_path}.tmp.{os.getpid()}"
+    shutil.copy2(source_path, tmp_path)
+    try:
+        with h5py.File(tmp_path, 'r+') as f:
+            has_img = 'img' in f
+            source_img = f['img'][:] if has_img else None
+            crd_source = f['coords'][:]
+            coords_attrs = dict(f['coords'].attrs)
+            key, barcode_source = _read_barcodes(f)
 
-        _, idx_in_source = np.intersect1d(
-            barcode_target, barcode_source, return_indices=True
-        )[1:3]
+            # Positions in the source of each target barcode, in TARGET order (np.intersect1d
+            # alone would return them sorted by barcode, out of line with the target patches).
+            pos = {b: i for i, b in enumerate(barcode_source)}
+            idx_in_source = np.array([pos[b] for b in barcode_target if b in pos], dtype=np.int64)
 
-        del f['coords']
-        ds = f.create_dataset('coords', data=crd_source[idx_in_source])
-        for k, v in coords_attrs.items():
-            ds.attrs[k] = v
+            del f['coords']
+            ds = f.create_dataset('coords', data=crd_source[idx_in_source])
+            for k, v in coords_attrs.items():
+                ds.attrs[k] = v
 
-        if has_img:
-            del f['img']
-            f.create_dataset('img', data=source_img[idx_in_source])
+            if has_img:
+                del f['img']
+                f.create_dataset('img', data=source_img[idx_in_source])
 
-        del f[key]
-        f.create_dataset(key, data=np.expand_dims(barcode_source[idx_in_source], axis=-1))
-        f.attrs['matched_to_target'] = True
+            del f[key]
+            f.create_dataset(key, data=np.expand_dims(barcode_source[idx_in_source], axis=-1))
+            f.attrs['matched_to_target'] = True
+        os.replace(tmp_path, source_path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 
 def _native_df(df: pd.DataFrame) -> pd.DataFrame:
@@ -183,30 +197,6 @@ def _native_df(df: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
-def _patch_barcodes(output_dir, name):
-    """Return patch barcodes for a sample as a list of str, or None if not found."""
-    for fname in (f"{name}.h5", f"{name}_patches.h5"):
-        path = os.path.join(output_dir, "patches", fname)
-        if os.path.isfile(path):
-            with h5py.File(path, "r") as f:
-                _, bc = _read_barcodes(f)
-            return bc.astype(str).tolist()
-    return None
-
-
-def _n_obs_h5ad(h5ad_path):
-    """Return number of observations in an h5ad file without loading X."""
-    with h5py.File(h5ad_path, "r") as f:
-        obs = f["obs"]
-        idx_key = obs.attrs.get("_index", "_index")
-        if idx_key in obs:
-            return len(obs[idx_key])
-        for key in obs.keys():
-            if isinstance(obs[key], h5py.Dataset):
-                return len(obs[key])
-    return None
-
-
 def _h5ad_obs_names(h5ad_path) -> list:
     """Read obs index (barcode list) from h5ad without loading X or var."""
     with h5py.File(h5ad_path, "r") as f:
@@ -217,57 +207,57 @@ def _h5ad_obs_names(h5ad_path) -> list:
     return []
 
 
-def _is_aligned(h5ad_path, barcodes: list) -> bool:
-    """Return True if the h5ad obs index already exactly matches barcodes."""
-    existing = _h5ad_obs_names(h5ad_path)
-    return existing == barcodes
+def _write_st_atomic(adata, save_path):
+    """Write the full ST data (X, obs, var, obsm, uns) through a temp file + rename, so a failed
+    write never leaves a partial file behind -- and never deletes an existing one."""
+    tmp_path = f"{save_path}.tmp.{os.getpid()}"
 
-
-def _write_aligned_adata(adata, save_dir):
-    try:
+    def write(with_uns):
         sc.AnnData(
             X=adata.X,
             obs=_native_df(adata.obs),
             var=_native_df(adata.var),
-        ).write(save_dir)
-    except Exception:
-        if os.path.exists(save_dir):
-            os.remove(save_dir)
-        raise
+            obsm=dict(adata.obsm),
+            uns=dict(adata.uns) if with_uns else None,
+        ).write(tmp_path)
+
+    try:
+        try:
+            write(with_uns=True)
+        except Exception as exc:
+            warnings.warn(f"{os.path.basename(save_path)}: could not write uns ({exc}); saving it without uns.")
+            write(with_uns=False)
+        os.replace(tmp_path, save_path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 
 def preprocess_st(name, adata, output_dir):
-    """Filter and save ST data aligned to patch barcodes."""
+    """Save the sample's full ST data to output_dir/st/<name>.h5ad unless a file is already there.
+
+    Every spot is kept (with obsm/uns). Spots are paired with their patches when the data is read
+    (st_alignment.read_st), never by filtering this file. An existing file is never rewritten: in
+    stpbench mode it is the raw input itself, and spots removed from it could not be recovered.
+    """
     os.makedirs(f"{output_dir}/st", exist_ok=True)
-    save_dir = f"{output_dir}/st/{name}.h5ad"
-
-    barcodes = _patch_barcodes(output_dir, name)
-
-    if os.path.exists(save_dir):
-        if barcodes is None:
-            print(f"ST data already exists for {name}. Skipping...")
-            return None
-        n_existing = _n_obs_h5ad(save_dir)
-        if n_existing == len(barcodes):
-            print(f"ST data already exists for {name}. Skipping...")
-            return None
-        print(f"ST data exists but spot count mismatch ({n_existing} vs {len(barcodes)} patches). Re-aligning {name}...")
-        adata = sc.read_h5ad(save_dir)
-    else:
-        if barcodes is None:
-            raise FileNotFoundError(f"Patch file not found for {name} in {output_dir}/patches/")
-        print(f"Saving ST data for {name}...")
-
-    valid = [b for b in barcodes if b in adata.obs_names]
-    adata = adata[valid].copy()
-    _write_aligned_adata(adata, save_dir)
+    save_path = f"{output_dir}/st/{name}.h5ad"
+    if os.path.exists(save_path):
+        print(f"ST data already exists for {name}. Skipping...")
+        return None
+    print(f"Saving ST data for {name}...")
+    _write_st_atomic(adata, save_path)
     return adata
 
 
 def align_st_to_patches(output_dir, sample_ids=None, overwrite=False):
-    """Align h5ad files in output_dir/st/ to their patch barcodes and re-save in-place.
+    """Check that every ST file in output_dir/st/ can be paired with its patch barcodes.
 
-    sample_ids: if given, only process those samples; otherwise process all *.h5ad files.
+    Files are not modified: pairing happens when the data is read (st_alignment.read_st). Raises,
+    listing the samples whose patch barcodes are missing from their ST data. `overwrite` is kept
+    for backward compatibility and has no effect.
+
+    sample_ids: if given, only check those samples; otherwise check all *.h5ad files.
     """
     st_dir_path = os.path.join(output_dir, "st")
     if not os.path.isdir(st_dir_path):
@@ -284,26 +274,24 @@ def align_st_to_patches(output_dir, sample_ids=None, overwrite=False):
     if not h5ad_files:
         return
 
-    aligned = 0
+    checked = 0
     skipped = 0
-    for h5ad_path in tqdm(h5ad_files, desc="Aligning ST to patches"):
+    broken = []
+    for h5ad_path in tqdm(h5ad_files, desc="Checking ST against patches"):
         name = os.path.splitext(os.path.basename(h5ad_path))[0]
-        barcodes = _patch_barcodes(output_dir, name)
+        patch_path = patch_path_for_st(h5ad_path)
+        barcodes = read_patch_barcodes(patch_path) if patch_path else None
         if barcodes is None:
             skipped += 1
             continue
+        n_missing = int((~pd.Index(barcodes).isin(_h5ad_obs_names(h5ad_path))).sum())
+        if n_missing:
+            broken.append(f"{name} ({n_missing}/{len(barcodes)} patch barcodes missing)")
+        checked += 1
 
-        if not overwrite and _is_aligned(h5ad_path, barcodes):
-            skipped += 1
-            continue
-
-        adata = sc.read_h5ad(h5ad_path)
-        valid = [b for b in barcodes if b in adata.obs_names]
-        adata = adata[valid].copy()
-        _write_aligned_adata(adata, h5ad_path)
-        aligned += 1
-
-    print(f"Aligned {aligned} ST files ({skipped} already aligned / no patch file).")
+    print(f"Checked {checked} ST files against their patches ({skipped} without a patch file).")
+    if broken:
+        raise ValueError("Patch barcodes missing from the ST data: " + ", ".join(broken))
 
 
 def _read_sample_ids(path):

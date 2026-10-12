@@ -17,6 +17,7 @@ from trident.wsi_objects.WSIFactory import load_wsi
 
 from core import normalize_adata
 from dataset.path_utils import emb_dir, patch_dir, st_dir
+from st_alignment import read_st
 
 
 def _open_h5(path, max_retries: int = 3, retry_delay: float = 2.0):
@@ -275,29 +276,6 @@ class STDataset(torch.utils.data.Dataset):
             )
         return data.loc[data[fold_col].astype(str).str.lower() == phase, "sample_id"].tolist()
         
-    def _align_adata_to_patches(self, name: str, adata):
-        """Filter and reorder adata rows to match the patch h5 barcode ordering.
-
-        Patch extraction may drop spots that fall outside the tissue boundary or
-        fail quality checks, so the patch h5 barcode list is a strict subset of
-        the adata obs_names. Reindexing adata to the patch barcode order ensures
-        that adata[i] and h5['img'][i] always refer to the same spot.
-        """
-        img_path = os.path.join(self.img_dir, f"{name}.h5")
-        if not os.path.isfile(img_path):
-            img_path = os.path.join(self.img_dir, f"{name}_patches.h5")
-        if not os.path.isfile(img_path):
-            return adata
-        with _open_h5(img_path) as f:
-            if 'barcode' not in f:
-                return adata
-            patch_barcodes = f['barcode'][:].flatten().astype(str).tolist()
-        # Subset and reorder adata to match patch order
-        valid = [b for b in patch_barcodes if b in adata.obs_names]
-        if len(valid) == len(adata):
-            return adata  # already aligned
-        return adata[valid]
-
     def load_img(self, name: str, idx: int = None, level: int = 0):
         """Load whole slide image of a sample.
 
@@ -404,7 +382,7 @@ class STDataset(torch.utils.data.Dataset):
             fallback = f"{st_dir[:-3]}/adata/{name}.h5ad"
             if os.path.isfile(fallback):
                 path = fallback
-        adata = sc.read_h5ad(path)
+        adata = read_st(path)  # rows paired with the sample's patches, in patch order
         
         total_genes = adata.var_names.tolist()
         

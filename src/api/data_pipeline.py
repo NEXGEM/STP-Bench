@@ -196,9 +196,10 @@ class DataPipeline:
 
 
     def align_st(self, sample_ids: list = None, overwrite: bool = False):
-        """Align h5ad files to their patch barcodes and re-save.
+        """Check that st/*.h5ad can be paired with their patch barcodes (files are not modified;
+        pairing happens at load time, see st_alignment.read_st).
 
-        sample_ids: if given, only align those samples; otherwise scan all st/*.h5ad.
+        sample_ids: if given, only check those samples; otherwise scan all st/*.h5ad.
         """
         from preprocess.prepare_data import align_st_to_patches
         align_st_to_patches(self.asset_dir, sample_ids=sample_ids, overwrite=overwrite)

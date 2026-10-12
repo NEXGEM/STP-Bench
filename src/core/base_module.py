@@ -17,6 +17,7 @@ from torchmetrics.regression import ( PearsonCorrCoef, MeanAbsoluteError)
 import pytorch_lightning as pl
 
 from core.model_adapters import get_adapter
+from st_alignment import read_st
 
 class BaseModule(pl.LightningModule):
 
@@ -324,7 +325,7 @@ class BaseModule(pl.LightningModule):
                 fallback = f"{data_dir}/adata/{name}.h5ad"
                 if os.path.isfile(fallback):
                     label_path = fallback
-            label = sc.read_h5ad(label_path)
+            label = read_st(label_path)  # rows in patch order, matching preds
             label = label[:, genes]
             adata_pred = label.copy()
             del adata_pred.X

@@ -9,6 +9,8 @@ from typing import Union
 from scipy.sparse import issparse
 import torch
 
+from st_alignment import read_st
+
 # The OmiCLIP/Loki checkpoint (WangGuangyuLab/Loki, downloaded via
 # huggingface_hub) predates PyTorch 2.6's default `weights_only=True` in
 # torch.load -- open_clip's load_checkpoint() calls torch.load() without
@@ -45,7 +47,7 @@ def encode_text_one_slide(
     device: Union[str, torch.device],
     batch_size: int = 32,
 ):
-    ad = sc.read_h5ad(st_path)
+    ad = read_st(st_path)  # rows paired with the sample's patches, in patch order
     house_keeping_genes = pd.read_csv(
         os.path.join(_SCRIPT_DIR, 'housekeeping_genes.csv'), index_col=0
     )
