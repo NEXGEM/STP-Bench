@@ -32,7 +32,7 @@ def load_st(path, platform, meta_dir=None):
 
     'visium' (raw SpaceRanger directory) and 'xenium' (Xenium_aligned/<sample>) follow HEST 1.1.x
     (see the section below); 'st' and 'visium-hd' still use the installed HEST readers.
-    `meta_dir`: where `pixel_sizes.csv` is looked up for 'visium' (see `pixel_size_um`).
+    `meta_dir`: holds the ids.csv whose `pixel_size` column is used for 'visium' (see `pixel_size_um`).
     """
     assert platform in ['st', 'visium', 'visium-hd', 'xenium'], \
         "platform must be one of ['st', 'visium', 'visium-hd', 'xenium']"
@@ -365,32 +365,59 @@ def find_pixel_size_from_spot_coords(my_df: pd.DataFrame, inter_spot_dist: float
 _SPOT_COLS = ['pxl_row_in_fullres', 'pxl_col_in_fullres', 'array_col', 'array_row']
 
 
+def _read_ids_csv(path):
+    # Every column as the literal text in the file, so a read-modify-write keeps sample ids such
+    # as "0123" and all other columns (case_id, fold_N, ...) byte-for-byte unchanged.
+    return pd.read_csv(path, dtype=str, keep_default_na=False)
+
+
+def _store_pixel_size(ids_path, name, pixel_size):
+    """Write `pixel_size` for sample `name` into ids.csv (re-read just before writing, replaced atomically)."""
+    df = _read_ids_csv(ids_path)
+    rows = df['sample_id'] == str(name)
+    if not rows.any():
+        warnings.warn(f"{name}: not listed in {ids_path}; its pixel size was not stored", stacklevel=3)
+        return
+    if 'pixel_size' not in df.columns:
+        df['pixel_size'] = ''
+    df.loc[rows, 'pixel_size'] = repr(float(pixel_size))
+    tmp = f"{ids_path}.tmp.{os.getpid()}"
+    df.to_csv(tmp, index=False)
+    os.replace(tmp, ids_path)
+
+
 def pixel_size_um(name, obs, meta_dir):
     """Pixel size (um/px) used to cut and segment Visium patches.
 
-    Preferably read from `<meta_dir>/pixel_sizes.csv` (columns sample_id, pixel_size_um).
-    Otherwise it is estimated from the spot grid (HEST's find_pixel_size_from_spot_coords).
-    That estimator only looks at the first few rows of the table sorted by array_row, so
-    its value depends on WHICH spots are given (a table already filtered to the kept spots
-    can differ from the raw one) and, through the tie order of an unstable sort, on the
-    numpy version -- differences show up around the 5th digit and can move spots that sit
-    right at the tissue-overlap threshold.
+    Read from the `pixel_size` column of `<meta_dir>/ids.csv`. When the column or this sample's
+    value is missing, it is estimated from the spot grid (HEST's find_pixel_size_from_spot_coords)
+    and written back to ids.csv, so every later run reuses that value. The estimator only looks
+    at the first few rows of the table sorted by array_row, so its value depends on WHICH spots
+    are given (a table already filtered to the kept spots can differ from the raw one) and,
+    through the tie order of an unstable sort, on the numpy version -- pinning it in ids.csv
+    keeps patches reproducible. Clear the value to force a re-estimate (e.g. after fixing the
+    spot coordinates).
     """
-    csv = os.path.join(meta_dir, 'pixel_sizes.csv') if meta_dir else None
-    if csv and os.path.isfile(csv):
-        df = pd.read_csv(csv)
-        hit = df.loc[df['sample_id'].astype(str) == str(name), 'pixel_size_um']
-        if len(hit):
-            return float(hit.iloc[0])
+    ids_path = os.path.join(meta_dir, 'ids.csv') if meta_dir else None
+    if ids_path and os.path.isfile(ids_path):
+        df = _read_ids_csv(ids_path)
+        if 'pixel_size' in df.columns:
+            hit = df.loc[df['sample_id'] == str(name), 'pixel_size'].str.strip()
+            hit = hit[hit != '']
+            if len(hit):
+                return float(hit.iloc[0])
+    else:
+        ids_path = None
     missing = [c for c in _SPOT_COLS if c not in obs.columns]
     if missing:
         raise KeyError(f"{name}: cannot estimate the pixel size, spot table lacks {missing} "
-                       f"and no entry was found in {csv}")
+                       f"and no pixel_size was found in {ids_path or '<meta_dir>/ids.csv'}")
     px, _ = find_pixel_size_from_spot_coords(obs[_SPOT_COLS].astype(int))
     warnings.warn(
-        f"{name}: pixel size {px:.6f} um/px was estimated from {len(obs)} spots (no entry in "
-        f"{csv}); the estimate depends on the spot subset and numpy version, so it can differ "
-        "from the value the reference patches were made with.", stacklevel=2)
+        f"{name}: pixel size {px:.6f} um/px was estimated from {len(obs)} spots "
+        + (f"and stored in {ids_path}." if ids_path else "(no ids.csv to store it in)."), stacklevel=2)
+    if ids_path:
+        _store_pixel_size(ids_path, name, px)
     return px
 
 
