@@ -241,14 +241,22 @@ class BLEEP(nn.Module):
         weight="weights/cigar/tenpercent_resnet18.ckpt",
         infer_method='average',
         use_pretrained_emb=False,
-        max_batch_size=1024
+        max_batch_size=1024,
+        image_encoder='resnet18_ciga'
     ):
         super().__init__()
 
         self.use_pretrained_emb = use_pretrained_emb
         
         if not use_pretrained_emb:
-            self.image_encoder = ImageEncoder(model_name=model_name, pretrained=pretrained, trainable=trainable, weight=weight)
+            # `model_name` receives the config's "BLEEP.BLEEP", so the backbone is chosen by `image_encoder`:
+            # 'resnet18_ciga' (Ciga et al. SSL weights from `weight`) or 'resnet50' (ImageNet, timm).
+            if image_encoder == 'resnet50':
+                self.image_encoder = ImageEncoder_resnet50(model_name='resnet50', pretrained=pretrained, trainable=trainable)
+            elif image_encoder == 'resnet18_ciga':
+                self.image_encoder = ImageEncoder(model_name=model_name, pretrained=pretrained, trainable=trainable, weight=weight)
+            else:
+                raise ValueError(f"image_encoder must be 'resnet18_ciga' or 'resnet50', got {image_encoder!r}")
         else:
             if image_embedding > 1536:
                 self.mapping = nn.Linear(image_embedding, 1536)
