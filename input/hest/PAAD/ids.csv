@@ -1,4 +1,4 @@
-sample_id,fold_0,fold_1,fold_2
-TENX116,test,train,train
-TENX140,train,test,train
-TENX126,train,train,test
+sample_id,fold_0,fold_1,fold_2,pixel_size
+TENX116,test,train,train,0.136887203675011
+TENX140,train,test,train,0.273767710586973
+TENX126,train,train,test,0.273890164914352

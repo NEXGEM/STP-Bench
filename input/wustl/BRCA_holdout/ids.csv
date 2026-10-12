@@ -1,0 +1,9 @@
+sample_id,case_id,fold_0,fold_1,fold_2,fold_3,fold_4,pixel_size
+HTA12_139_3,HTA12_139,test,test,test,test,test,0.4022407211194283
+HTA12_248_8,HTA12_248,test,test,test,test,test,0.4035684639860927
+HTA12_248_10,HTA12_248,test,test,test,test,test,0.4035112238957171
+HTA12_248_12,HTA12_248,test,test,test,test,test,0.4035414072754683
+HTA12_249_7,HTA12_249,test,test,test,test,test,0.4033413737665276
+HTA12_249_9,HTA12_249,test,test,test,test,test,0.4036902839455818
+HTA12_248_23,HTA12_248,test,test,test,test,test,0.40201004610778185
+HTA12_283_1,HTA12_283,test,test,test,test,test,0.40218324332698124

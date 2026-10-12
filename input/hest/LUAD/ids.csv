@@ -1,3 +1,3 @@
-sample_id,fold_0,fold_1
-TENX141,test,train
-TENX118,train,test
+sample_id,fold_0,fold_1,pixel_size
+TENX141,test,train,0.273643086791955
+TENX118,train,test,0.273855837686545

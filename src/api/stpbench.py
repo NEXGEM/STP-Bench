@@ -942,6 +942,39 @@ def _build_runtime_cfg(payload: Dict[str, Any]):
                 cfg.DATA.genes_override = overlap["genes"]
                 cfg.DATA.num_outputs = len(overlap["genes"])
                 cfg.DATA.gene_output_indices = overlap["indices"]
+        if payload.get("gene_list"):
+            # User-requested gene subset for evaluation (e.g. re-scoring an
+            # already-trained fixed-width checkpoint against a smaller gene
+            # panel without retraining) -- same mechanism as predict(gene_list=...)
+            # below, just wired into the evaluate path too. Composes with any
+            # restriction already applied above (e.g. _external_gene_overlap):
+            # gene_output_indices stays absolute into the *original* full
+            # training panel, matching _restrict_to_model_gene_vocab's contract.
+            overlap, missing = _user_gene_overlap(cfg.MODEL.gene_path, payload["gene_list"])
+            if missing:
+                _payload_logger(payload).warning(
+                    "gene_list_genes_missing",
+                    genes=",".join(missing),
+                    gene_path=cfg.MODEL.gene_path,
+                )
+            if overlap is None:
+                raise ValueError(
+                    "None of the requested gene_list genes are in the training "
+                    f"gene panel ({cfg.MODEL.gene_path})."
+                )
+            if cfg.DATA.get("genes_override"):
+                current = set(cfg.DATA.gene_output_indices)
+                pairs = [(g, i) for g, i in zip(overlap["genes"], overlap["indices"]) if i in current]
+            else:
+                pairs = list(zip(overlap["genes"], overlap["indices"]))
+            if not pairs:
+                raise ValueError(
+                    "Requested gene_list has no overlap with the currently "
+                    "active gene panel for this evaluation."
+                )
+            cfg.DATA.genes_override = [g for g, _ in pairs]
+            cfg.DATA.num_outputs = len(pairs)
+            cfg.DATA.gene_output_indices = [i for _, i in pairs]
         _restrict_to_model_gene_vocab(cfg)
         # Which evaluation this is, so its metrics are stored apart from every other one (internal: eval/,
         # external: eval_external/<data>/ -- see core.eval_subdir) and recorded in the fold's ledger.
@@ -1657,6 +1690,7 @@ class STPred:
         external_data: Optional[str] = None,
         folds: Optional[Sequence[int]] = None,
         timestamps: Optional[Dict[str, str] | str] = None,
+        gene_list: Optional[Sequence[str]] = None,
     ) -> BenchmarkResult:
         """Evaluate all models on internal or external data."""
 
@@ -1695,6 +1729,7 @@ class STPred:
             folds=folds,
             timestamps=timestamps,
             train_data=train_data,
+            gene_list=gene_list,
         )
         self.state["eval_results"][(mode, eval_data)] = results
         return results
@@ -1704,10 +1739,11 @@ class STPred:
         data: Optional[str] = None,
         folds: Optional[Sequence[int]] = None,
         timestamps: Optional[Dict[str, str] | str] = None,
+        gene_list: Optional[Sequence[str]] = None,
     ) -> BenchmarkResult:
         """Evaluate trained models on the internal test folds."""
 
-        return self.evaluate(mode="int", data=data, folds=folds, timestamps=timestamps)
+        return self.evaluate(mode="int", data=data, folds=folds, timestamps=timestamps, gene_list=gene_list)
 
     def evaluate_external(
         self,
@@ -1715,6 +1751,7 @@ class STPred:
         train_data: Optional[str] = None,
         folds: Optional[Sequence[int]] = None,
         timestamps: Optional[Dict[str, str] | str] = None,
+        gene_list: Optional[Sequence[str]] = None,
     ) -> BenchmarkResult:
         """Evaluate trained models on an external labeled dataset."""
 
@@ -1724,6 +1761,7 @@ class STPred:
             external_data=data,
             folds=folds,
             timestamps=timestamps,
+            gene_list=gene_list,
         )
 
     def predict(

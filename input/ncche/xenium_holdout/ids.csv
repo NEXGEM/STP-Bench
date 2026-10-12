@@ -1,0 +1,4 @@
+sample_id,case_id,fold_0,fold_1,fold_2,fold_3,fold_4
+Xenium_LUAD_No2,Xenium_LUAD_No2,test,test,test,test,test
+Xenium_TSU-33,Xenium_TSU-33,test,test,test,test,test
+Xenium_TSU-41,Xenium_TSU-41,test,test,test,test,test

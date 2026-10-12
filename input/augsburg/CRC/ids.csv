@@ -1,0 +1,13 @@
+sample_id,case_id,fold_0,fold_1,fold_2,fold_3,fold_4
+E23018092,E23018092,test,train,train,train,train
+E2321835,E2321835,train,train,train,train,test
+POLE_6CRC,POLE_6CRC,test,train,train,train,train
+output-XETG00457__0063568__E2101965__20250825__113350,output-XETG00457__0063568__E2101965__20250825__113350,train,train,train,train,test
+output-XETG00457__0063568__E23017445__20250825__113350,output-XETG00457__0063568__E23017445__20250825__113350,train,train,train,test,train
+output-XETG00457__0064343__E25015134__20251027__121130,output-XETG00457__0064343__E25015134__20251027__121130,train,train,test,train,train
+output-XETG00457__0064627__E25001115__20251027__121130,output-XETG00457__0064627__E25001115__20251027__121130,train,test,train,train,train
+output-XETG00457__0064627__E25019368__20251027__121130,output-XETG00457__0064627__E25019368__20251027__121130,test,train,train,train,train
+E23003624,E23003624,train,test,train,train,train
+P1_CRC,P1_CRC,train,train,train,test,train
+P2_CRC,P2_CRC,train,train,test,train,train
+P5_CRC,P5_CRC,train,test,train,train,train

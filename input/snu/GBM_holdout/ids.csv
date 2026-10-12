@@ -1,0 +1,10 @@
+sample_id,case_id,fold_0,fold_1,fold_2,fold_3,fold_4,pixel_size
+SNU19A,SNU19,test,test,test,test,test,0.28860587352068906
+SNU21A,SNU21,test,test,test,test,test,0.2880269698039141
+SNU21Afrozen,SNU21,test,test,test,test,test,0.2873467981321257
+SNU21B,SNU21,test,test,test,test,test,0.2828634300574301
+SNU21Bfrozen,SNU21,test,test,test,test,test,0.28745670193113015
+SNU21Cfrozen,SNU21,test,test,test,test,test,0.28728257115346967
+SNU21Dfrozen,SNU21,test,test,test,test,test,0.2878982908323127
+SNU51A,SNU51,test,test,test,test,test,0.2839230930778068
+SNU51B,SNU51,test,test,test,test,test,0.2879592713473971

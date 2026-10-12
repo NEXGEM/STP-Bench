@@ -5,10 +5,10 @@ MODEL:
   # this at an existing local snapshot). This integration targets UNI2-h
   # specifically (vit_giant_patch14_224, embed_dim=1536), not the original
   # UNI(v1) the AsymST paper used -- see src/model/AsymST/vit_encoder.py.
-  uni_weights_path: /path/to/uni2-h/pytorch_model.bin
+  uni_weights_path: local/checkpoints/uni2-h/pytorch_model.bin
   cnn_pretrained: true
   cnn_train_backbone: true
-  vit_freeze_strategy: partial
+  vit_freeze_strategy: full_freeze
   vit_unfreeze_last_n: 4
   vit_drop_path: 0.0
   fusion_heads: 16

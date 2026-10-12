@@ -16,12 +16,12 @@ TRAINING:
     factor: 0.1
   every_n_epochs: 1
 DATA:
-  data_dir: /path/to/stp_bench_data
+  data_dir: local/stp_bench_data
   meta_dir: input/wustl/PDAC
   output_dir: output/pred
   gene_type: hmhvg
-  num_genes: 200
-  num_outputs: 200
+  num_genes: 1000
+  num_outputs: 1000
   normalize: true
   cpm: false
   smooth: false
@@ -40,9 +40,10 @@ DATA:
     pin_memory: false
     shuffle: false
 preprocess:
+  n_top_hmhvg: 1000
   mode: stpbench
   platform: visium
   meta_dir: input/wustl/PDAC
-  input_dir: /path/to/stp_bench_data
-  output_dir: /path/to/stp_bench_data
+  input_dir: local/stp_bench_data
+  output_dir: local/stp_bench_data
   overwrite: false

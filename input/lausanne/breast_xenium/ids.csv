@@ -1,0 +1,12 @@
+sample_id,case_id,fold_0,fold_1,fold_2,fold_3,fold_4
+GSM9509156,B17,train,train,train,test,train
+GSM9509157,B16,train,train,train,train,test
+GSM9509158,B15,test,train,train,train,train
+GSM9509159,B14,train,test,train,train,train
+GSM9509161,B13,train,train,test,train,train
+GSM9509162,B12,train,train,train,test,train
+GSM9509163,B11,train,train,train,train,test
+GSM9509164,B10,test,train,train,train,train
+GSM9509166,B9,test,train,train,train,train
+GSM9509167,B8,train,test,train,train,train
+GSM9509169,B6,train,train,test,train,train

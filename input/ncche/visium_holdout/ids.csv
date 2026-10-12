@@ -1,0 +1,14 @@
+sample_id,case_id,fold_0,fold_1,fold_2,fold_3,fold_4,pixel_size
+LUAD_No_2,LUAD_No_2,test,train,train,train,train,0.3775227457248947
+FFPE_LUAD_No2_A,LUAD_No_2,train,train,test,train,train,0.7613682661876553
+FFPE_LUAD_No2_B,LUAD_No_2,train,test,train,train,train,0.7614971367733883
+FFPE_LUAD_No2_D,LUAD_No_2,train,train,train,train,test,0.7640563959587339
+TSU-19_a-1,TSU-19,train,train,test,train,train,0.7530043627015444
+TSU-19_a-2,TSU-19,train,test,train,train,train,0.7533631751521848
+TSU-19_b-1,TSU-19,train,train,train,train,test,0.7528573408774413
+TSU-19_b-2,TSU-19,train,train,train,test,train,0.7531613832635367
+TSU-20_1,TSU-20,train,test,train,train,train,0.7518634281415439
+TSU-20_2,TSU-20,test,train,train,train,train,0.7518584474017291
+TSU-22,TSU-22,train,train,train,test,train,0.7534826705259223
+TSU-26,TSU-26,test,train,train,train,train,0.7518677448627864
+TSU-30,TSU-30,train,train,test,train,train,0.7518702537605788
