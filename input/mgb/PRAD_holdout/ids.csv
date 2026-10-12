@@ -1,0 +1,6 @@
+sample_id,case_id,fold_0,fold_1,fold_2,fold_3,fold_4,pixel_size
+AS-1,P1,test,test,test,test,test,0.6132828494763883
+AS-7_UMich3,P10,test,test,test,test,test,1.0763966692910147
+AS-8_UMich3,P10,test,test,test,test,test,1.1421166688826965
+AS-11_UMich3,P12,test,test,test,test,test,1.0800953928917385
+AS-12_UMich3,P12,test,test,test,test,test,1.1082644645967967

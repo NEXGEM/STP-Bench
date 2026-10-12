@@ -1,0 +1,18 @@
+# BLEEP without PFM embeddings: the image branch is an ImageNet-pretrained ResNet50 (timm), as in the original
+# BLEEP, trained end-to-end on patch images instead of projecting precomputed UNI global embeddings.
+TRAINING:
+  mode: max
+  save_best_only: true
+MODEL:
+  model_name: BLEEP.BLEEP
+  temperature: 1.0
+  image_embedding: 2048
+  projection_dim: 512
+  trainable: true
+  dropout: 0.1
+  use_pretrained_emb: false
+  image_encoder: resnet50
+  pretrained: true
+  adapter: contrastive
+DATA:
+  dataset_name: BleepDataset
