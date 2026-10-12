@@ -537,8 +537,15 @@ class STSample:
         len_tmp = len(coords_topleft)
         in_slide_mask = (0 <= coords_topleft[:, 0] + patch_size_src) & (coords_topleft[:, 0] < self.wsi.width) & (0 <= coords_topleft[:, 1] + patch_size_src) & (coords_topleft[:, 1] < self.wsi.height)
         coords_topleft = coords_topleft[in_slide_mask]
-        if len(coords_topleft) < len_tmp:
-            warnings.warn(f"Filtered {len_tmp - len(coords_topleft)} spots outside the WSI")
+        n_outside = len_tmp - len(coords_topleft)
+        if n_outside:
+            msg = f"{name}: filtered {n_outside}/{len_tmp} spots outside the WSI"
+            if n_outside > 0.01 * len_tmp:
+                # In-tissue spots should lie on the slide; many outside it usually means the spot
+                # coordinates are in a different pixel space than the image (e.g. a downsampled WSI).
+                msg += (" -- check that the spot coordinates match this image's pixel space "
+                        "(resolution/orientation)")
+            warnings.warn(msg)
 
         barcodes = np.array(adata.obs.index)
         barcodes = barcodes[in_slide_mask]
@@ -553,6 +560,12 @@ class STSample:
             valid_barcodes = barcodes
 
         patcher.to_h5(h5_path, extra_assets={'barcode': valid_barcodes})
+        # Where each spot went, for auditing the spot -> patch filtering later.
+        with h5py.File(h5_path, 'a') as f:
+            f.attrs['n_spots'] = len_tmp
+            f.attrs['n_spots_outside_slide'] = n_outside
+            f.attrs['n_spots_off_tissue'] = len(barcodes) - len(valid_barcodes)
+            f.attrs['n_patches'] = len(valid_barcodes)
 
         if dump_visualization:
             patcher.save_visualization(os.path.join(patch_save_dir, name + '_patch_vis.png'), dpi=400)

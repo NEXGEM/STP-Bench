@@ -38,10 +38,10 @@ def _st_dir(data_dir: str) -> str:
 
 def load_gt_adata(data_dir: str, sample_id: str):
     """Load ground-truth ST for one sample, raw counts, no transform."""
-    import scanpy as sc
+    from st_alignment import read_st
 
     path = os.path.join(_st_dir(data_dir), f"{sample_id}.h5ad")
-    return sc.read_h5ad(path)
+    return read_st(path)  # rows in patch order, matching the predictions
 
 
 def load_pred_adata(pred_path_fold: str, sample_id: str):

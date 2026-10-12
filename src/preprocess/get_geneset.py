@@ -9,6 +9,8 @@ import anndata as ad
 import scanpy as sc
 from tqdm import tqdm
 
+from st_alignment import read_st
+
 
 def load_data(st_dir, id_path=None):
     if id_path:
@@ -23,7 +25,8 @@ def load_data(st_dir, id_path=None):
             + ", ".join(missing[:10])
             + ("..." if len(missing) > 10 else "")
         )
-    return [sc.read_h5ad(file) for file in tqdm(file_list, desc="Loading ST data")]
+    # Only spots that have a patch count, as in training (see preprocess/st_alignment.py).
+    return [read_st(file) for file in tqdm(file_list, desc="Loading ST data")]
 
 
 def find_geneset(data_list, n_top_hvg=50, n_top_heg=1000, n_top_hmhvg=200,

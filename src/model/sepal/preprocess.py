@@ -31,6 +31,7 @@ from backbone import LocalNet
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from core.utils.train_utils import normalize_adata
+from st_alignment import read_st
 from model.linear_prob.model import LinearProb
 
 
@@ -381,7 +382,7 @@ class SepalPreprocess:
         path = f"{self.dataset_path}/adata/{name}.h5ad"
         if not os.path.isfile(path):
             path = f"{self.dataset_path}/st/{name}.h5ad"
-        adata = sc.read_h5ad(path)
+        adata = read_st(path)  # rows paired with the sample's patches, in patch order
         
         
         # common_genes = list(set(genes).intersection(set(adata.var_names)))
