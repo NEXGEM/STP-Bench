@@ -285,6 +285,7 @@ parameter references and examples of every one of these:
 - `stp.benchmark(internal_data, external_data=None)`: preprocess, train, internal evaluate, and optionally external predict/evaluate, in one call.
 - `stp.predict(data, train_data=None, ...)`: predict on slide-image-only data — a named config, or (see [Easy Inference Directly on a WSI](docs/guide.md#easy-inference-directly-on-a-wsi)) a bare WSI file/directory/asset dir with no config to write.
 - `stp.downstream(mode, prior_result=None, ...)`: run gene-set enrichment, cell-type deconvolution, or spatial-domain clustering on predicted ST, optionally compared against ground truth — see [Downstream Analyses](#downstream-analyses).
+- `stp.refine(method="generag", prior_result=None, ...)`: refine any model's saved predictions with GeneRAG retrieval against the training spots, compared against the unrefined predictions — see [GeneRAG Refinement](#generag-refinement).
 - `stp.visualize(gene, sample, ...)`: render a predicted gene's expression for one sample on the slide's own thumbnail. See [Visualizing a Prediction](docs/guide.md#visualizing-a-prediction).
 
 Every workflow method above returns a `BenchmarkResult` (dict-compatible,
@@ -485,6 +486,52 @@ Extends the existing prediction path:
     eval/metrics.csv                 # comparison vs. ground truth
     eval/gt/                         # cached ground-truth-side results
 ```
+
+</details>
+
+## GeneRAG Refinement
+
+`stp.refine(method="generag")` applies [GeneRAG](src/model/generag/generag.py)'s
+retrieval on top of **any** model's saved predictions: each spot's predicted
+panel and its patch embedding query a bank of the training run's own training
+spots, and the retrieved combination of real expression profiles replaces the
+prediction. No retraining — it only reads prediction, embedding and
+ground-truth files.
+
+```python
+eval_res = stp.evaluate_internal(data="ncche/xenium")
+refined  = stp.refine(prior_result=eval_res)          # every model in stp.models
+print(refined.summary())                               # <model> vs <model>+GeneRAG
+```
+
+Refined predictions are written as the model `<model>+GeneRAG`
+(`<DATA.output_dir>/<data>/<model>+GeneRAG/[<train_data>/]fold<k>/`, with a
+`refine_metrics.csv` of baseline vs refined Pearson/MAE per sample).
+Hyperparameters (`omega`, `alpha`, `l1_ratio`) come from
+`config/refine/defaults.yaml`, with per-model values there, and can be
+overridden per data config (`DATA.refine.generag`) or per call
+(`overrides={...}`).
+
+<details>
+<summary><strong>Refinement details</strong> (external data, defaults)</summary>
+
+- **External data**: all training-panel genes are GeneRAG anchors, but
+  `evaluate_external` only saves the genes the external data measures —
+  predict the full panel first, then refine (scored on the measured genes,
+  as `evaluate_external`):
+
+  ```python
+  stp.predict(data="hest/LUAD", train_data="ncche/xenium", folds=[0, 1, 2, 3, 4])
+  stp.refine(data="hest/LUAD", train_data="ncche/xenium")
+  ```
+
+  (`predict` skips samples that already have a prediction file, so remove
+  the external-evaluation files first.)
+- **Defaults**: chosen by a nested 5-fold search on `ncche/xenium`
+  (UNI2-h, 200 HMHVGs). Ridge coefficients (`l1_ratio: 0`) were best for
+  every model, and the best `omega` (weight of the image-embedding term)
+  falls as the baseline gets stronger: 0.1 for TRIPLEX/DeepSpot, 0.5 for
+  LinearProb/EGN, 0.9 for BLEEP/StFlow.
 
 </details>
 

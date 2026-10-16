@@ -1,0 +1,21 @@
+# GeneRAG refinement (stp.refine(method="generag")) of any baseline's saved predictions.
+# omega: weight of the image-embedding term vs the baseline's predicted panel (0 = trust the
+#   baseline's prediction only, 1 = image retrieval only); alpha / l1_ratio: ElasticNet penalty
+#   on the retrieval coefficients (l1_ratio 0 = ridge).
+# Defaults come from a nested 5-fold search on ncche/xenium (UNI2-h, hmhvg 200 genes): ridge
+# (l1_ratio 0) was best for every baseline, and the best omega falls as the baseline gets
+# stronger, hence the per_model overrides. Precedence: generag < per_model[<model>] <
+# DATA.refine.generag (data config) < refine(..., overrides=...).
+generag:
+  omega: 0.5
+  alpha: 0.3
+  l1_ratio: 0.0
+  positive: true
+  max_iter: 2000
+  tol: 1.0e-4
+  max_batch_size: 1024
+  per_model:
+    TRIPLEX: {omega: 0.1, alpha: 0.1}
+    DeepSpot: {omega: 0.1, alpha: 0.1}
+    BLEEP: {omega: 0.9}
+    StFlow: {omega: 0.9}
