@@ -1255,6 +1255,47 @@ def _run_single_downstream_action(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _run_single_refine_action(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Process-worker entrypoint for one (model, fold) refinement — same
+    minimal-cfg shape as `_run_single_downstream_action`: refinement only
+    reads saved prediction/ground-truth/embedding files and the training
+    run's own data (for the reference bank), never a checkpoint."""
+    from addict import Dict as _ADict
+    from refine import run_generag_refine
+
+    logger = _payload_logger(payload)
+    cfg = _ADict()
+    cfg.DATA.update(payload["target"])
+    cfg.DATA.fold = payload["fold"]
+    cfg.DATA.model = payload["model"]
+    cfg.DATA.pred_path_fold = payload["pred_path_fold"]
+    cfg.DATA.out_path_fold = payload["out_path_fold"]
+    cfg.TRAIN.update(payload["train"])
+    cfg.REFINE.update(payload["refine_params"])
+    cfg.GENERAL.gpu_id = payload["gpu_id"]
+    if cfg.DATA.external:
+        # Score on the genes the external data measures, exactly as evaluate_external does.
+        overlap = _external_gene_overlap(cfg.DATA.gene_path, cfg.DATA.meta_dir, cfg.DATA.data_dir)
+        cfg.DATA.eval_genes = overlap["genes"] if overlap is not None else None
+
+    with suppress_library_output(), logger.section(
+        "refine_action", method=payload["method"], model=payload["model"], data=payload["data"],
+        fold=payload["fold"], gpu_id=payload["gpu_id"],
+    ):
+        result = run_generag_refine(cfg)
+
+    return {
+        "model": payload["model"],
+        "data": payload["data"],
+        "train_data": payload["train_data"],
+        "mode": payload["method"],
+        "fold": payload["fold"],
+        "gpu_id": payload["gpu_id"],
+        "run": {"out_path_fold": result["out_path_fold"]},
+        "evaluate": {"per_sample": result["per_sample"]},
+    }
+
+
 class STPred:
     """User-facing API for the STPBench multi-model benchmark.
 
@@ -1982,6 +2023,148 @@ class STPred:
             )
 
         return DownstreamResult({"dry_run": False, "plan": plan, "results": results})
+
+    def refine(
+        self,
+        method: str = "generag",
+        data: Optional[str] = None,
+        train_data: Optional[str] = None,
+        prior_result: Optional[BenchmarkResult] = None,
+        evaluate_against_gt: bool = True,
+        folds: Optional[Sequence[int]] = None,
+        models: Optional[Sequence[str]] = None,
+        overrides: Optional[Dict[str, Any]] = None,
+    ) -> DownstreamResult:
+        """Refine any model's saved predictions with GeneRAG retrieval.
+
+        Each baseline's predicted panel is the anchor query of GeneRAG's
+        Dual-Constrained Retrieval against a bank of the training run's own
+        training spots (fold k's, same normalization as the labels), using
+        the training data's global `DATA.model_name` embeddings. Refined
+        predictions are written next to the baseline's under the model name
+        `<model>+GeneRAG` (`{output_dir}/{data}/<model>+GeneRAG/[{train_data}/]
+        fold{k}/`), with a `refine_metrics.csv` comparing baseline and refined
+        Pearson/MAE per sample — on the full panel internally, and on the
+        genes the external data measures (as `evaluate_external`) otherwise.
+
+        Prediction files are located like `downstream()`: from
+        `prior_result.prediction_dirs()` when given, otherwise from
+        `data`/`train_data`/`folds`. They must cover the whole training panel
+        (all panel genes are anchors); external evaluation only saves the
+        measured overlap, so for external data run `predict(data,
+        train_data=..., folds=...)` first.
+
+        Hyperparameters merge `config/refine/defaults.yaml[method]` <
+        its `per_model[<model>]` < the data config's `DATA.refine.<method>` <
+        `overrides`. Returns a `DownstreamResult` whose rows carry both
+        `<model>` and `<model>+GeneRAG` (`summary()` compares them).
+        """
+        if method != "generag":
+            raise ValueError(f"method must be 'generag', got {method!r}.")
+
+        train_data = train_data or self.state.get("internal_data")
+        if data is None and prior_result is not None:
+            data = prior_result.get("plan", {}).get("data")
+        data = data or train_data
+        if data is None:
+            raise ValueError(
+                "refine() needs data (directly, via prior_result, or from a prior "
+                "train()/evaluate()/predict() call)."
+            )
+        train_data = train_data or data
+
+        data_cfg = self._resolve_data(data)
+        train_data_cfg = self._resolve_data(train_data)
+        model_cfgs = self._resolve_models(models)
+
+        data_section = data_cfg.config.get("DATA", {})
+        train_section = train_data_cfg.config.get("DATA", {})
+        output_dir = _abs_path(self.repo_root, data_section.get("output_dir", "output/pred"))
+        data_dir = _abs_path(self.repo_root, data_section.get("data_dir"))
+        meta_dir = _abs_path(self.repo_root, data_section.get("meta_dir", data_section.get("data_dir")))
+        train_data_dir = _abs_path(self.repo_root, train_section.get("data_dir"))
+        train_meta_dir = _abs_path(self.repo_root, train_section.get("meta_dir", train_section.get("data_dir")))
+        gene_path = f"{train_meta_dir}/{train_section.get('gene_type')}_{train_section.get('num_genes')}genes.json"
+        if not os.path.isfile(gene_path):
+            gene_path = f"{train_data_dir}/{train_section.get('gene_type')}_{train_section.get('num_genes')}genes.json"
+
+        # The external gene overlap is computed in the worker, not here: it imports the
+        # `dataset` package, whose pynvml import breaks CUDA in workers forked afterwards.
+        target = {
+            "data_dir": data_dir, "meta_dir": meta_dir, "external": data_cfg.name != train_data_cfg.name,
+            "gene_path": gene_path, "evaluate_against_gt": evaluate_against_gt,
+        }
+        train = {
+            "data_dir": train_data_dir, "meta_dir": train_meta_dir,
+            "gene_type": train_section.get("gene_type"), "num_genes": train_section.get("num_genes"),
+            "normalize": train_section.get("normalize", True), "cpm": train_section.get("cpm", False),
+            "smooth": train_section.get("smooth", False), "model_name": train_section.get("model_name", "uni_v2"),
+        }
+
+        fold_values = list(folds) if folds is not None else list(range(train_data_cfg.config.get("TRAINING", {}).get("num_k", 1)))
+        prior_pred_dirs = prior_result.prediction_dirs() if prior_result is not None else {}
+
+        payloads = []
+        for index, model_cfg in enumerate(model_cfgs):
+            params = self._merge_refine_defaults(method, model_cfg.name, data_cfg, overrides)
+            model_prior_dirs = prior_pred_dirs.get(model_cfg.name)
+            for fold in fold_values:
+                if isinstance(model_prior_dirs, dict) and fold in model_prior_dirs:
+                    pred_path_fold = model_prior_dirs[fold]
+                elif isinstance(model_prior_dirs, str):
+                    pred_path_fold = model_prior_dirs
+                else:
+                    pred_path_fold = _pred_path_for(output_dir, data_cfg.name, model_cfg.name, train_data_cfg.name, fold)
+                payloads.append({
+                    "method": method,
+                    "model": model_cfg.name,
+                    "data": data_cfg.name,
+                    "train_data": train_data_cfg.name,
+                    "fold": fold,
+                    "gpu_id": self.gpu_id + (index % self.gpu),
+                    "pred_path_fold": pred_path_fold,
+                    "out_path_fold": _pred_path_for(
+                        output_dir, data_cfg.name, f"{model_cfg.name}+GeneRAG", train_data_cfg.name, fold
+                    ),
+                    "target": target,
+                    "train": train,
+                    "refine_params": params,
+                    "verbose": self.verbose,
+                    "log_file": self.log_file,
+                })
+
+        plan = {
+            "mode": method, "data": data_cfg.name, "train_data": train_data_cfg.name,
+            "payloads": len(payloads), "evaluate_against_gt": evaluate_against_gt,
+        }
+        if self.dry_run:
+            self.logger.info("refine", status="dry_run", method=method, data=data_cfg.name, payloads=len(payloads))
+            return DownstreamResult({"dry_run": True, "plan": plan})
+
+        with self.logger.section(
+            "refine", method=method, data=data_cfg.name, train_data=train_data_cfg.name, payloads=len(payloads),
+        ):
+            results = _dispatch_payloads(
+                payloads, _run_single_refine_action, gpu=self.gpu, logger=self.logger,
+                action_label=f"refine:{method}",
+            )
+
+        return DownstreamResult({"dry_run": False, "plan": plan, "results": results})
+
+    def _merge_refine_defaults(
+        self, method: str, model: str, data_cfg: NamedConfig, overrides: Optional[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """config/refine/defaults.yaml[method] < its per_model[model] <
+        DATA.refine.<method> < per-call `overrides`."""
+        defaults_path = os.path.join(self.repo_root, "config", "refine", "defaults.yaml")
+        defaults = _load_yaml_file(defaults_path).get(method, {}) if os.path.isfile(defaults_path) else {}
+        per_model = defaults.pop("per_model", {}) or {}
+        merged = _merge_dicts(defaults, per_model.get(model, {}) or {})
+        data_overrides = (data_cfg.config.get("DATA", {}).get("refine", {}) or {}).get(method, {})
+        merged = _merge_dicts(merged, data_overrides)
+        if overrides:
+            merged = _merge_dicts(merged, overrides)
+        return merged
 
     def _merge_downstream_defaults(
         self, mode: str, data_cfg: NamedConfig, overrides: Optional[Dict[str, Any]]
