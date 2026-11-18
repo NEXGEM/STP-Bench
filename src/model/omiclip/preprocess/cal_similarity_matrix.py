@@ -1,4 +1,10 @@
 import os
+import sys as _sys
+_p = os.path.abspath(__file__)
+while os.path.basename(_p) != "src" and _p != os.path.dirname(_p):
+    _p = os.path.dirname(_p)
+_sys.path.insert(0, _p)
+from ids_io import read_ids, phase_label
 from tqdm import tqdm
 import pandas as pd
 import numpy as np
@@ -93,7 +99,7 @@ def _process_fold(
         # ref_data_dir-driven unfiltered loading in base_dataset.py), not a
         # fold-specific test split of the external data's own (irrelevant)
         # CV folds.
-        query_samples = pd.read_csv(os.path.join(query_meta_dir, 'ids.csv')).sample_id.tolist()
+        query_samples = read_ids(query_meta_dir).sample_id.tolist()
     else:
         query_samples = _read_ids(query_meta_dir, 'test', fold).sample_id.tolist()
 
@@ -122,16 +128,24 @@ def _process_fold(
 
     key_samples = _read_ids(meta_dir, 'train', fold).sample_id.tolist()
 
-    print("Encoding text of key samples...")
-    key_st_embeddings = torch.cat([
-        encode_text_one_slide(
-            model, tokenizer,
-            _st_path(asset_dir, s),
-            device,
-            batch_size=text_batch_size,
-        ).detach().cpu()
-        for s in tqdm(key_samples)
-    ], dim=0)
+    # the key (training-set) text embeddings depend only on the training set and the fold, not on the query set: cache them
+    _cache = os.path.join(asset_dir, 'similarity_matrix', '_key_text_cache', f"{meta_dir.strip('/').replace('/', '__')}__fold{fold}.pt")
+    if os.path.isfile(_cache):
+        print(f"Loading cached text embeddings of key samples: {_cache}")
+        key_st_embeddings = torch.load(_cache, map_location='cpu')
+    else:
+        print("Encoding text of key samples...")
+        key_st_embeddings = torch.cat([
+            encode_text_one_slide(
+                model, tokenizer,
+                _st_path(asset_dir, s),
+                device,
+                batch_size=text_batch_size,
+            ).detach().cpu()
+            for s in tqdm(key_samples)
+        ], dim=0)
+        os.makedirs(os.path.dirname(_cache), exist_ok=True)
+        torch.save(key_st_embeddings, _cache + '.tmp'); os.replace(_cache + '.tmp', _cache)
 
     print("Encoding images of query samples...")
     os.makedirs(save_path, exist_ok=True)
@@ -174,6 +188,7 @@ def main(
     model, preprocess, tokenizer = load_model(model_path, device)
 
     folds = range(_num_folds(meta_dir)) if fold is None else [fold]
+    if os.environ.get('OMICLIP_ONLY_FOLDS'): folds = [int(x) for x in os.environ['OMICLIP_ONLY_FOLDS'].split(',')]   # e.g. zero-shot evaluation that uses fold 0 only
 
     for f in folds:
         print(f"Processing fold: {f}")
@@ -190,10 +205,10 @@ def _read_ids(meta_dir, phase, fold):
         return pd.read_csv(split_path)
 
     ids_path = os.path.join(meta_dir, 'ids.csv')
-    ids = pd.read_csv(ids_path)
+    ids = read_ids(meta_dir)
     fold_col = f'fold_{fold}'
     if phase in {'train', 'test'} and fold_col in ids.columns:
-        return ids.loc[ids[fold_col].astype(str).str.lower() == phase].reset_index(drop=True)
+        return ids.loc[ids[fold_col].astype(str).str.lower() == phase_label(ids, phase)].reset_index(drop=True)
     if phase == 'test' and 'sample_id' in ids.columns:
         return ids
     raise FileNotFoundError(f"{split_path} not found and {fold_col} is missing from {ids_path}")

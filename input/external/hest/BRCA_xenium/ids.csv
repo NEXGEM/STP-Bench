@@ -1,0 +1,10 @@
+sample_id,case_id,pixel_size,fold_0,fold_1,fold_2,fold_3,fold_4
+NCBI783,C1,0.2739598559774087,train,train,train,test,train
+NCBI784,C2,0.3637880037049625,test,train,train,train,train
+NCBI785,C2,0.3639107956749145,test,train,train,train,train
+TENX94,C7,0.2125,train,train,train,train,test
+TENX95,C8,0.2125,train,train,train,test,train
+TENX96,C9,0.2125,train,train,test,train,train
+TENX97,C10,0.2125,train,train,test,train,train
+TENX98,C11,0.2125,train,test,train,train,train
+TENX99,C11,0.2125,train,test,train,train,train

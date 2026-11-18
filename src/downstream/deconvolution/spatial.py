@@ -46,7 +46,10 @@ def run_cell2location_sample(
         adata, cell_state_df=cell_state_df,
         N_cells_per_location=n_cells_per_location, detection_alpha=detection_alpha,
     )
-    model.train(max_epochs=spatial_epochs, batch_size=spatial_batch_size, accelerator=accelerator)
+    # a minibatch that holds the whole sample (n_obs <= batch size) takes scvi's shuffled DataSplitter path and collapses to a flat abundance
+    # (2026-10-27 test: Xenium_TSU-33, 1848 spots, batch 2048); batch_size=None (full batch, sorted) is fine
+    train_batch = None if adata.n_obs <= spatial_batch_size else spatial_batch_size
+    model.train(max_epochs=spatial_epochs, batch_size=train_batch, accelerator=accelerator)
     adata = model.export_posterior(
         adata, sample_kwargs={"num_samples": spatial_posterior_samples, "batch_size": spatial_batch_size},
     )

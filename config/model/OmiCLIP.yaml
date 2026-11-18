@@ -1,7 +1,7 @@
 MODEL:
   model_name: omiclip.OmiCLIP
   fine_tune: false
-  model_path: /home/chungym/.cache/huggingface/hub/models--WangGuangyuLab--Loki/snapshots/8e08d3a131428feed2341167084d7b15c143a2a7/checkpoint.pt
+  model_path: local/checkpoints/omiclip/checkpoint.pt
   skip_train: true
   adapter: contrastive
   extra_preprocess:

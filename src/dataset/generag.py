@@ -1,4 +1,5 @@
 import os
+from genes_io import path_exists, read_genes_path
 
 import numpy as np
 import torch
@@ -17,7 +18,7 @@ class GeneRAGDataset(STDataset):
     * Val/test/predict: ``label`` stays the full `DATA` gene panel;
       ``get_bank()`` returns the retrieval bank built from the training spots.
 
-    Anchor genes come from ``{anchor_gene_type}_{num_anchor_genes}genes.json``
+    Anchor genes come from the set ``{anchor_gene_type}_{num_anchor_genes}`` of genes.json
     (same lookup as the panel JSON) and must be a subset of the training gene
     panel.
     """
@@ -92,10 +93,9 @@ class GeneRAGDataset(STDataset):
     def _resolve_anchor_idx(self):
         import json
         path = self._resolve_gene_path(self.anchor_gene_type, self.num_anchor_genes, self.ref_data_dir)
-        if not os.path.isfile(path):
+        if not path_exists(path):
             raise ValueError(f"{path} is not found")
-        with open(path, 'r') as f:
-            anchors = json.load(f)['genes']
+        anchors = read_genes_path(path)
         if self.anchor_gene_type in ['mean', 'hmhvg', 'total']:
             anchors = anchors[:self.num_anchor_genes]
         if len(anchors) != self.num_anchor_genes:

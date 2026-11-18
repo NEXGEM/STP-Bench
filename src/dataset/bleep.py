@@ -2,6 +2,7 @@
 import os
 
 import json
+from genes_io import gene_ref, has_genes, read_genes
 import numpy as np
 from scipy import sparse
 import h5py
@@ -67,11 +68,10 @@ class BleepDataset(STDataset):
                 # embeddings sized num_genes) — always use the full training
                 # panel for it, never genes_override, which only restricts
                 # the current (external) sample's own label via self.genes.
-                if not os.path.isfile(f"{ref_data_dir}/{gene_type}_{num_genes}genes.json"):
-                    raise ValueError(f"{gene_type}_{num_genes}genes.json is not found in {ref_data_dir}")
+                if not has_genes(ref_data_dir, gene_type, num_genes):
+                    raise ValueError(f"gene set not found: {gene_ref(ref_data_dir, gene_type, num_genes)}")
 
-                with open(f"{ref_data_dir}/{gene_type}_{num_genes}genes.json", 'r') as f:
-                    genes = json.load(f)['genes']
+                genes = read_genes(ref_data_dir, gene_type, num_genes)
                 ref_genes = genes[:num_genes] if gene_type in ['mean', 'hmhvg', 'all'] else genes
 
                 self.genes = list(genes_override) if genes_override is not None else ref_genes

@@ -1,4 +1,5 @@
 import os
+from genes_io import write_set
 from glob import glob
 import argparse
 import json
@@ -9,12 +10,16 @@ import anndata as ad
 import scanpy as sc
 from tqdm import tqdm
 
+from ids_io import has_val, holdout_mask
 from st_alignment import read_st
 
 
 def load_data(st_dir, id_path=None):
     if id_path:
-        ids = pd.read_csv(id_path)['sample_id'].dropna().astype(str).tolist()
+        df = pd.read_csv(id_path)
+        if has_val(df):  # held-out (test) samples never take part in gene selection
+            df = df[~holdout_mask(df)]
+        ids = df['sample_id'].dropna().astype(str).tolist()
         file_list = [f"{st_dir}/{sample_id}.h5ad" for sample_id in ids]
     else:
         file_list = glob(f"{st_dir}/*.h5ad")
@@ -149,5 +154,4 @@ if __name__ == "__main__":
     )
 
     for prefix, genes in geneset.items():
-        with open(f"{args.output_dir}/{prefix}_{len(genes)}genes.json", "w") as f:
-            json.dump({"genes": genes}, f)
+        write_set(args.output_dir, prefix, len(genes), genes)

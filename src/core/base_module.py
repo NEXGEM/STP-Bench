@@ -2,6 +2,7 @@
 import os
 import sys
 import json
+from genes_io import gene_ref, read_genes_path
 import inspect
 import importlib
 
@@ -270,16 +271,10 @@ class BaseModule(pl.LightningModule):
             num_genes = self.config.DATA.num_genes
             
             if genes is None or len(genes) == 0:
-                if num_genes == 30:
-                    dataset = self.config.DATA.ref_data_dir.split('/')[-1]
-                    data_dir = self.config.DATA.ref_data_dir.replace(f'/{dataset}', '')
-                    gene_path = f"{data_dir}/ncche-visium_hest-PRAD_wustl-BRCA_30genes.json"
-                else:    
-                    gene_path = f"{self.config.DATA.ref_data_dir}/{gene_type}_{num_genes}genes.json"
+                gene_path = gene_ref(self.config.DATA.ref_data_dir, gene_type, num_genes)
 
                 try:
-                    with open(gene_path, 'r') as f:
-                        genes = json.load(f)['genes']
+                    genes = read_genes_path(gene_path)
                 except:
                     raise ValueError('Gene list file for prediction not found!')
             

@@ -9,7 +9,7 @@ import torch
 def setup_paths(output_dir: str, features: Tuple[str, ...] = ('global', 'neighbor', 'target')) -> Dict[str, str]:
     """Return a path map for the output directory, creating only the emb
     subdirectories actually needed (`features`, e.g. from a model's
-    feature_type) — a model like StNet that uses raw patches directly
+    feature_type) — a model like DeepSpotM that uses raw patches directly
     (feature_type: none) needs none of them at all."""
     paths = {
         'patches':          os.path.join(output_dir, 'patches'),

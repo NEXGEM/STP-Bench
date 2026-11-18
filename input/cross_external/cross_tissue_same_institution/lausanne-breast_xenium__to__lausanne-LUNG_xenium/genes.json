@@ -1,0 +1,48 @@
+{
+ "sets": {
+  "eval": {
+   "genes": [
+    "BANK1",
+    "CCR7",
+    "CD14",
+    "CD163",
+    "CD3E",
+    "CD79A",
+    "CD83",
+    "CD8A",
+    "CTLA4",
+    "CXCR4",
+    "EGFR",
+    "FOXP3",
+    "GZMA",
+    "GZMK",
+    "HAVCR2",
+    "KIT",
+    "KLRB1",
+    "KLRD1",
+    "LAG3",
+    "LILRA4",
+    "MKI67",
+    "MS4A1",
+    "PDGFRA",
+    "PRF1",
+    "SELL",
+    "SPIB",
+    "TCL1A",
+    "TNFRSF17"
+   ],
+   "train_set": "lausanne/breast_xenium",
+   "test_set": "external/lausanne/LUNG_xenium",
+   "condition": "cross_tissue_same_institution",
+   "panel": "cross_tissue list of lausanne/breast_xenium",
+   "samples": [
+    "GSM9509134",
+    "GSM9509135",
+    "GSM9509136",
+    "GSM9509137",
+    "GSM9509138",
+    "GSM9509139"
+   ]
+  }
+ }
+}

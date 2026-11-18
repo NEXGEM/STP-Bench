@@ -15,6 +15,50 @@ from trident.wsi_objects.WSIFactory import load_wsi
 
 
 
+
+class _TiffWSI:
+    """Minimal stand-in for plain (single-level, non-pyramidal, uncompressed) TIFF slides that OpenSlide cannot open."""
+    mag = None
+    level_downsamples = None
+
+    def __init__(self, path):
+        import tifffile
+        try:
+            self.arr = tifffile.memmap(path)
+        except Exception:
+            self.arr = tifffile.imread(path)
+        self.height, self.width = self.arr.shape[:2]
+
+    def get_dimensions(self):
+        return (self.width, self.height)
+
+    def create_patcher(self, patch_size, src_mag=None, dst_mag=None, custom_coords=None, coords_only=False, pil=True, **kw):
+        # trident coords format: patch_size is at dst_mag, level 0 is src_mag -> crop patch_size * src_mag / dst_mag px, resize to patch_size
+        src = int(round(patch_size * (float(src_mag) / float(dst_mag)))) if src_mag and dst_mag else int(patch_size)
+        return _TiffPatcher(self, custom_coords, src, patch_size)
+
+
+class _TiffPatcher:
+    """patcher[i] -> (PIL tile of size target, x, y); coords are level-0 top-left, src crop size patch_size_src -> resized to patch_size_target"""
+    def __init__(self, wsi, coords, src, target):
+        self.wsi, self.coords, self.src, self.target = wsi, np.asarray(coords), int(src), int(target)
+
+    def __len__(self):
+        return len(self.coords)
+
+    def __getitem__(self, i):
+        x, y = int(self.coords[i][0]), int(self.coords[i][1])
+        a = self.wsi.arr
+        H, W = a.shape[:2]
+        x0, y0, x1, y1 = max(x, 0), max(y, 0), min(x + self.src, W), min(y + self.src, H)
+        tile = np.full((self.src, self.src, 3), 255, dtype=np.uint8)
+        if x1 > x0 and y1 > y0:
+            tile[y0 - y:y1 - y, x0 - x:x1 - x] = np.asarray(a[y0:y1, x0:x1, :3])
+        im = Image.fromarray(tile)
+        if self.src != self.target:
+            im = im.resize((self.target, self.target), Image.BILINEAR)
+        return im, x, y
+
 class H5TileDataset(Dataset):
     def __init__(self, 
                 h5_path, 
@@ -60,7 +104,12 @@ class H5TileDataset(Dataset):
             if wsi_path is None:
                 raise FileNotFoundError(f"WSI file for sample_id {sample_id} not found in {wsi_dir} with extension {ext} or .tif")
 
-            self.wsi = load_wsi(wsi_path, lazy_init=False)
+            try:
+                self.wsi = load_wsi(wsi_path, lazy_init=False)
+            except Exception as _e:   # plain TIFF that OpenSlide cannot read
+                if not wsi_path.lower().endswith(('.tif', '.tiff')):
+                    raise
+                self.wsi = _TiffWSI(wsi_path)
             if feature_type == 'neighbor':
                 self.patcher = self._get_patcher(h5_path, n=self.n)
             elif mode == 'inference':
@@ -176,6 +225,15 @@ class H5TileDataset(Dataset):
             if None in (patch_size, level0_magnification, target_magnification):
                 raise KeyError('Missing attributes in coords_attrs.')
         except (KeyError, FileNotFoundError, ValueError) as e:
+            # HEST dump_patches format (img dropped): attrs patch_size_src / patch_size_target / pixel_size, coords = top-left (level 0)
+            with h5py.File(coords_path, 'r') as _f:
+                _a = dict(_f['coords'].attrs); _coords = _f['coords'][:]
+            if all(k in _a for k in ('patch_size_src', 'patch_size_target', 'pixel_size')):
+                if isinstance(self.wsi, _TiffWSI):
+                    return _TiffPatcher(self.wsi, _coords, _a['patch_size_src'], _a['patch_size_target'])
+                dst_px = float(_a['patch_size_src']) * float(_a['pixel_size']) / float(_a['patch_size_target'])
+                return self.wsi.create_patcher(int(_a['patch_size_target']), float(_a['pixel_size']), dst_px,
+                                               custom_coords=_coords, coords_only=False, pil=True)
             warnings.warn(f"Cannot read using Trident coords format ({str(e)}). Trying with CLAM/Fishing-Rod.")
             patch_size, patch_level, custom_downsample, coords = read_coords_legacy(coords_path)
 

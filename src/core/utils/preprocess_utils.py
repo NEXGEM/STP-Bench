@@ -373,6 +373,7 @@ def _read_ids_csv(path):
 
 def _store_pixel_size(ids_path, name, pixel_size):
     """Write `pixel_size` for sample `name` into ids.csv (re-read just before writing, replaced atomically)."""
+    ids_path = os.path.realpath(ids_path)  # a <name>_holdout/ids.csv link must keep pointing at the shared file
     df = _read_ids_csv(ids_path)
     rows = df['sample_id'] == str(name)
     if not rows.any():

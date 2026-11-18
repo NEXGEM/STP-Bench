@@ -42,14 +42,6 @@ def main(data_dir: str, overwrite: bool = False) -> None:
     output_dir = os.path.join(data_dir, "name_feature", _LLM_MODEL_NAME)
     os.makedirs(output_dir, exist_ok=True)
 
-    model = transformers.AutoModelForCausalLM.from_pretrained(
-        _LLM_MODEL_NAME,
-        torch_dtype=torch.float16,
-        attn_implementation="flash_attention_2",
-        device_map="cuda",
-    )
-    tokenizer = transformers.AutoTokenizer.from_pretrained(_LLM_MODEL_NAME)
-
     gene2name_path = os.path.join(_SCRIPT_DIR, "gene2name.pkl")
     with open(gene2name_path, "rb") as f:
         names = pickle.load(f)
@@ -65,6 +57,16 @@ def main(data_dir: str, overwrite: bool = False) -> None:
         names = {k: v for k, v in names.items() if "symbol" in v}
 
     print(f"Generating name features for {len(names)} genes -> {output_dir}")
+    if not names:
+        return
+
+    model = transformers.AutoModelForCausalLM.from_pretrained(
+        _LLM_MODEL_NAME,
+        torch_dtype=torch.float16,
+        attn_implementation="flash_attention_2",
+        device_map="cuda",
+    )
+    tokenizer = transformers.AutoTokenizer.from_pretrained(_LLM_MODEL_NAME)
 
     with torch.no_grad():
         for name in tqdm(names):

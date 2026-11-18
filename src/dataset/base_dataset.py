@@ -2,6 +2,7 @@
 from glob import glob
 import os
 import json
+from genes_io import gene_ref_in, path_exists, read_genes_path
 import time
 import warnings
 
@@ -17,6 +18,7 @@ from trident.wsi_objects.WSIFactory import load_wsi
 
 from core import normalize_adata
 from dataset.path_utils import emb_dir, patch_dir, st_dir
+from ids_io import read_ids, select_ids
 from st_alignment import read_st
 
 
@@ -222,7 +224,7 @@ class STDataset(torch.utils.data.Dataset):
                 return len(self.int2id)
         
     def _resolve_gene_path(self, gene_type: str, num_genes: int, ref_data_dir: str = None) -> str:
-        """Return the first existing gene JSON path, checking ref_data_dir → meta_dir → data_dir.
+        """Return the gene-set address (<meta_dir>/genes.json#<key>) of the first dir that has it, checking ref_data_dir → meta_dir.
 
         ref_data_dir (the training run's own meta_dir) takes priority when set:
         a model's output columns are fixed to the gene panel it was trained on,
@@ -230,16 +232,7 @@ class STDataset(torch.utils.data.Dataset):
         the eval dataset's own independently-computed HVG list, which is
         typically a different set of genes entirely.
         """
-        candidates = []
-        if ref_data_dir:
-            candidates.append(f"{ref_data_dir}/{gene_type}_{num_genes}genes.json")
-        candidates.append(f"{self.meta_dir}/{gene_type}_{num_genes}genes.json")
-        if self.data_dir != self.meta_dir:
-            candidates.append(f"{self.data_dir}/{gene_type}_{num_genes}genes.json")
-        for path in candidates:
-            if os.path.isfile(path):
-                return path
-        return candidates[0]  # return primary path so the caller can raise a clear error
+        return gene_ref_in([ref_data_dir, self.meta_dir], gene_type, num_genes)  # primary dir if none has it, so the caller raises a clear error
 
     def _resolve_genes(self, gene_type: str, num_genes: int, num_outputs: int,
                         ref_data_dir: str = None, genes_override: list = None) -> list:
@@ -252,18 +245,20 @@ class STDataset(torch.utils.data.Dataset):
         if genes_override is not None:
             return list(genes_override)
         gene_path = self._resolve_gene_path(gene_type, num_genes, ref_data_dir)
-        if not os.path.isfile(gene_path):
+        if not path_exists(gene_path):
             raise ValueError(f"{gene_path} is not found")
-        with open(gene_path, 'r') as f:
-            genes = json.load(f)['genes']
+        genes = read_genes_path(gene_path)
         return genes[:num_outputs] if gene_type in ['mean', 'hmhvg', 'total'] else genes
 
     def _get_ids(self, phase=None, fold=None, ids_dir=None):
-        """Load sample IDs from ids.csv, optionally filtered by fold/phase."""
-        ids_path = os.path.join(ids_dir or self.meta_dir, "ids.csv")
-        if not os.path.isfile(ids_path):
-            raise FileNotFoundError(f"{ids_path} is not found.")
-        data = pd.read_csv(ids_path)
+        """Load sample IDs from ids.csv, optionally filtered by fold/phase.
+
+        phase 'train' selects the fold's `train` rows; 'test' selects its `val` rows (CV) or, for a
+        `*_holdout` meta_dir, its held-out `test` rows (see ids_io).
+        """
+        meta_dir = ids_dir or self.meta_dir
+        data = read_ids(meta_dir)
+        ids_path = os.path.join(meta_dir, "ids.csv")
         if "sample_id" not in data.columns:
             raise ValueError(f"{ids_path} must contain a sample_id column.")
         if phase is None or fold is None:
@@ -274,8 +269,8 @@ class STDataset(torch.utils.data.Dataset):
                 f"Data split CSV not found — run preprocessing (split_data step) first.\n"
                 f"  hint: {fold_col} is not present in {ids_path}."
             )
-        return data.loc[data[fold_col].astype(str).str.lower() == phase, "sample_id"].tolist()
-        
+        return select_ids(data, fold, phase)
+
     def load_img(self, name: str, idx: int = None, level: int = 0):
         """Load whole slide image of a sample.
 
@@ -383,6 +378,8 @@ class STDataset(torch.utils.data.Dataset):
             if os.path.isfile(fallback):
                 path = fallback
         adata = read_st(path)  # rows paired with the sample's patches, in patch order
+        if not adata.var_names.is_unique:  # e.g. Visium HD / some HEST samples carry a few duplicated gene names -> name-based indexing fails; keep the first
+            adata = adata[:, ~adata.var_names.duplicated()]
         
         total_genes = adata.var_names.tolist()
         

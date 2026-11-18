@@ -11,20 +11,25 @@ collection of published models under matched **internal cross-validation** and
 **external-dataset** evaluation protocols, so results stay directly comparable
 across models and datasets.
 
-<img src="figures/STP-Bench.jpg" />
+<img src="figures/STP-Bench.v2.png" />
 
 Most models plug into a shared, swappable **patch encoder** (`DATA.model_name`,
 default `uni_v2`) and only differ in the **downstream architecture** built on
 top of its embeddings — the benchmark deliberately keeps that encoder fixed
 across those models so performance difference reflects architecture,
 not "which foundation model happened to extract its features." A smaller set
-of models bring their own internal image encoder instead (a custom CNN/ViT
-backbone baked into the model class, or a zero-shot pretrained model) and sit
-outside that comparison axis — see
+of models bring their own pretrained image encoder instead (OmiCLIP, DeepSpotM,
+DeepSpotMFT, STPath) and sit outside that comparison axis — see
 [Configuration](#configuration) below for which is which.
 
 ## Updates
 
+- **2026-11-18** — **Important changes to data splits, gene sets, evaluation sets and models** (please review before updating an existing checkout):
+  - **One `ids.csv` per dataset, with `train` / `val` / `test` labels.** Each `fold_<k>` column labels every sample `train` (trains the fold-k model), `val` (cross-validation sample held out in fold k) or `test` (held-out sample, never trained on, identical in every fold). The held-out samples that were previously listed in a separate `<name>_holdout/ids.csv` now live in the same file; they are evaluated by passing `<name>_holdout` (e.g. `ncche/xenium_holdout`) as the data name, which needs no config file or folder of its own. Old-style `ids.csv` files are still read.
+  - **One `genes.json` per `meta_dir`.** All gene sets of a dataset (`hmhvg_200`, `total`, `eval_fixed200`, ...) are stored as keyed sets (`{"sets": {...}}`) in a single `genes.json` instead of separate `<gene_type>_<N>genes.json` files, and are addressed as `<meta_dir>/genes.json#<key>`.
+  - **Restructured external evaluation.** `config/data/external/...` hold the external test sets, and `config/data/cross_external/<condition>/<train>__to__<test>.yaml` pair a training set with an external test set (cross-institution, cross-tissue, cross-platform); the gene list used for scoring is the `eval` set of the pair's `genes.json`. External evaluation scores the genes of the training model's panel that are measured in the external data.
+  - **New data.** Internal training set `lausanne/breast_xenium` (breast, Xenium). New external test sets under `config/data/external/`: HEST `BRCA_visium`, `BRCA_visium_hd`, `CRC_visium`, `CRC_visium_hd`, `CRC_xenium`, `LUNG_visium`, `LUNG_visium_hd`, `PAAD_visium`, and `lausanne/LUNG_xenium`; `BRCA_xenium` and `PRAD_visium` also gain new samples. The data for all of them has been added to the Hugging Face dataset [`nexgem/STP-Bench`](https://huggingface.co/datasets/nexgem/STP-Bench).
+  - **Models.** `StNet`, `HistoSPACE`, `M2OST` and `M2ORT` were removed because they could not be integrated with the shared pathology foundation model (PFM) encoder.
 - **2026-08-22** — Added **[AsymST](https://www.nature.com/articles/s41598-026-63426-x)** as a new DenseNet-121 + UNI2-h fusion model.
 - **2026-08-21** — Added **downstream analyses** (`stp.downstream(...)`): gene-set enrichment, cell-type deconvolution, and spatial-domain identification on top of predicted ST — see [Downstream Analyses](#downstream-analyses).
 - **2026-07-17** — Added **[DeepSpotM](https://www.medrxiv.org/content/10.64898/2026.06.19.26356060v1)** as a new zero-shot pretrained model.
@@ -191,11 +196,11 @@ project. Use the pinned requirements above instead.
 Preprocessed benchmark data (patches, ST expression, embeddings, metadata) is
 hosted on Hugging Face at [`nexgem/STP-Bench`](https://huggingface.co/datasets/nexgem/STP-Bench).
 
-**Total size: ~444 GB** for the full dataset — `scripts/download_data.py` lets
+**Total size: ~706 GB** for the full dataset — `scripts/download_data.py` lets
 you pull just the dataset(s) or sample(s) you need instead:
 
 ```bash
-# Full dataset (~444 GB)
+# Full dataset (~706 GB)
 python scripts/download_data.py --data_dir /path/to/download/data
 
 # One or more datasets (namespace/name, matches config/data/<namespace>/<name>.yaml)
@@ -241,7 +246,7 @@ stp_bench/
 ## Quick Start
 
 > Requires the benchmark data downloaded and `DATA.data_dir` set as above —
-> running this against the bundled `ncche/xenium` / `hest/LUAD` configs
+> running this against the bundled `ncche/xenium` / `external/lausanne/LUNG_xenium` configs
 > as-is (with their placeholder paths) will fail `stp.check(..., strict=True)`
 > with a list of missing files.
 
@@ -258,7 +263,7 @@ stp = STPred(
 )
 
 stp.check(data="ncche/xenium", strict=True)          # validate before a heavy run
-result = stp.benchmark(internal_data="ncche/xenium", external_data="hest/LUAD")
+result = stp.benchmark(internal_data="ncche/xenium", external_data="external/lausanne/LUNG_xenium")
 
 print(result.summary())
 result.save("benchmark_results.csv")
@@ -339,9 +344,9 @@ architecture (`config/model/<Model>.yaml`). Keep it at the default — every
 model consuming pre-extracted embeddings (`feature_type: global/neighbor/
 target/all`) is benchmarked against the same encoder, so score differences
 reflect architecture rather than encoder choice; changing it per-model would
-conflate the two. A minority of models bypass this shared encoder — a custom
-image encoder baked into the model (`feature_type: none`) or a zero-shot
-pretrained backbone (e.g. DeepSpotM) — and aren't on the same comparison
+conflate the two. A minority of models bypass this shared encoder — a pretrained
+image encoder baked into the model (`feature_type: none`, e.g. DeepSpotM) or a
+zero-shot pretrained backbone — and aren't on the same comparison
 axis; see [docs/guide.md — Adding a New Model](docs/guide.md#adding-a-new-model)
 for how a new model's config should flag its category.
 

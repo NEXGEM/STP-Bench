@@ -60,7 +60,13 @@ def run_deconvolution(cfg) -> Dict[str, Any]:
     os.makedirs(out_dir, exist_ok=True)
 
     manifest: Dict[str, str] = {}
-    for sample_id in list_fold_samples(cfg):
+    from .evaluate import deconv_samples
+
+    for sample_id in deconv_samples(cfg, params):
+        csv_path = os.path.join(out_dir, f"{sample_id}.q05_cell_abundance_w_sf.csv")
+        if os.path.isfile(csv_path) and os.path.isfile(os.path.join(out_dir, f"{sample_id}.h5ad")):
+            manifest[sample_id] = os.path.join(out_dir, f"{sample_id}.h5ad")  # resume: already deconvolved
+            continue
         adata = load_pred_adata(cfg.DATA.pred_path_fold, sample_id)
         adata = to_count_scale(adata, source="pred", cpm=cpm)
         result_adata, abundance = run_cell2location_sample(

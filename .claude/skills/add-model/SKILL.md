@@ -84,17 +84,17 @@ The fix, already used by ~18 models in this repo (`grep -rl max_batch_size
 src/model/` before inventing your own variant) — accept a `max_batch_size`
 constructor kwarg (default e.g. `1024`) and split any inference-phase batch
 bigger than it before the expensive part of `forward`, concatenating results
-after. Minimal version (`src/model/st_net/st_net.py`):
+after. Minimal version (`src/model/linear_prob/model.py`):
 
 ```python
 def forward(self, img, label=None, **kwargs):
     phase = kwargs.get('phase', 'train')
     if phase == 'train':
-        output = self.model(img)
+        output = self.linear(img)
     elif img.shape[0] > self.max_batch_size:
-        output = torch.cat([self.model(c) for c in img.split(self.max_batch_size, dim=0)], dim=0)
+        output = torch.cat([self.linear(c) for c in img.split(self.max_batch_size, dim=0)], dim=0)
     else:
-        output = self.model(img)
+        output = self.linear(img)
     ...
 ```
 

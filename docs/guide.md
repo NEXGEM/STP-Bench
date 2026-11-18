@@ -134,7 +134,7 @@ and updates `stp.state["train_results"]`.
 
 ```python
 stp.evaluate_internal(data="ncche/xenium")               # test folds from training
-stp.evaluate_external(data="hest/LUAD", train_data="ncche/xenium")
+stp.evaluate_external(data="external/lausanne/LUNG_xenium", train_data="ncche/xenium")
 ```
 
 - `evaluate_internal(data=None, folds=None, timestamps=None)` — evaluates the
@@ -178,7 +178,7 @@ an `eval/metrics.csv` that was overwritten by an external evaluation; the ledger
 ### One-shot Benchmark
 
 ```python
-result = stp.benchmark(internal_data="ncche/xenium", external_data="hest/LUAD")
+result = stp.benchmark(internal_data="ncche/xenium", external_data="external/lausanne/LUNG_xenium")
 ```
 
 Runs `preprocess` → `train` → `evaluate_internal`, and if `external_data` is
@@ -291,9 +291,9 @@ stp.predict(
 
 The output `.h5ad` includes `obsm['spatial']` patch coordinates, which is what
 `visualize()` (next section) plots against. This path works for models using
-the default `feature_type` mechanism (StNet, TRIPLEX, DeepSpot, HisToGene,
-DeepSpotM, ...); models with `extra_preprocess` (EGN, EGGN, Sepal, OmiCLIP,
-M2ORT, M2OST) and SGN/Stem still require the named-config path above.
+the default `feature_type` mechanism (TRIPLEX, DeepSpot, HisToGene,
+DeepSpotM, ...); models with `extra_preprocess` (EGN, EGGN, Sepal, OmiCLIP)
+and SGN/Stem still require the named-config path above.
 
 `coordinates` takes patch **centers**, converted internally to the
 non-overlapping top-left-corner format the pipeline stores on disk — no need
@@ -389,7 +389,7 @@ stp = STPred.from_run(
     models=["LinearProb"],
     timestamp="2026-05-18-12-00-00",   # omit to auto-pick each model's latest run
 )
-stp.evaluate_external(data="hest/LUAD")
+stp.evaluate_external(data="external/lausanne/LUNG_xenium")
 ```
 
 `timestamp` accepts a single string (used for every model), a
@@ -505,7 +505,7 @@ This runs four steps in order:
 | Step | What it does | Output |
 |---|---|---|
 | Raw preprocessing | Extracts patches and ST expression per sample | `<data_dir>/patches/`, `<data_dir>/st/` |
-| Gene set preparation | Selects highly variable / expressed genes | `<meta_dir>/<gene_type>_<num_genes>genes.json` |
+| Gene set preparation | Selects highly variable / expressed genes | `<meta_dir>/genes.json` (set key `<gene_type>_<num_genes>`) |
 | CV splits | Assigns samples to train/test folds | `<meta_dir>/ids.csv` (with `fold_*` columns) |
 | Feature extraction | Runs patch encoder on all samples | `<data_dir>/emb/<feature_type>/features_<model_name>/` |
 
@@ -547,9 +547,17 @@ data_dir/
             └── <sample_id>.h5
 
 meta_dir/
-├── ids.csv                       # sample_id, fold_0, fold_1, ...
-└── hmhvg_200genes.json           # selected gene list
+├── ids.csv                       # sample_id, case_id, fold_0..fold_4 (train/val/test), pixel_size
+└── genes.json                    # {"sets": {"hmhvg_200": {"genes": [...]}, "total": ..., "eval_fixed200": ...}}
 ```
+
+Every gene set is addressed by one string, `<meta_dir>/genes.json#<key>` (e.g. `input/ncche/xenium/genes.json#hmhvg_200`;
+`<key>` = `<gene_type>_<num_genes>`, or `total`); `src/genes_io.py` is the only code that reads or writes these files.
+`cross_external/<condition>/<pair>/genes.json` holds a single set `eval` (the evaluation genes of the pair, with its
+`train_set`, `test_set`, `condition`, `panel`, `samples`), and external datasets (`input/external/...`) carry no gene
+sets of their own: the model is evaluated on its training panel intersected with the genes the external data measure.
+In the set metadata, `test_set` is a data name accepted by `evaluate_external(data=...)` (`<name>_holdout` for the
+internal held-out samples of the training set, `external/<institution>/<set>` for an external set).
 
 ### Using benchmark data (stpbench mode)
 
@@ -575,6 +583,16 @@ Create it by hand (or from whatever manifest your download came with)
 *before* calling `preprocess()`; every dataset already under
 `config/data/` in this repo has its `ids.csv` committed under
 `input/<namespace>/<name>/ids.csv` for exactly this reason.
+
+In the committed `ids.csv`, each `fold_k` column holds `train`, `val` (the
+cross-validation hold-out fold) or `test` (the fixed patient-level held-out
+samples, `test` in every fold). The held-out samples are evaluated through
+the dataset name `<name>_holdout` (e.g. `stp.evaluate_external(data="ncche/xenium_holdout",
+train_data="ncche/xenium")`): it needs no config or folder of its own — it is
+built from `config/data/<name>.yaml` (optional `holdout:` block for overrides) and
+a `<meta_dir>_holdout` alias of `ids.csv`/`genes.json` is generated on first use
+(git-ignored). Read ids with `src/ids_io.read_ids(meta_dir)`, which returns the
+held-out rows for a `*_holdout` dir and the CV rows otherwise.
 
 For **new datasets not yet in STPBench**, use `mode: raw` and point `input_dir` at your raw data (per-sample SpaceRanger / Xenium output directories).
 

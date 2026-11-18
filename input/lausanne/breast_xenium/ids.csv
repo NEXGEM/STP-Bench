@@ -1,0 +1,16 @@
+sample_id,case_id,fold_0,fold_1,fold_2,fold_3,fold_4
+GSM9509156,B17,train,train,train,val,train
+GSM9509157,B16,train,train,train,train,val
+GSM9509158,B15,val,train,train,train,train
+GSM9509159,B14,train,val,train,train,train
+GSM9509161,B13,train,train,val,train,train
+GSM9509162,B12,train,train,train,val,train
+GSM9509163,B11,train,train,train,train,val
+GSM9509164,B10,val,train,train,train,train
+GSM9509166,B9,val,train,train,train,train
+GSM9509167,B8,train,val,train,train,train
+GSM9509169,B6,train,train,val,train,train
+GSM9509168,B7,test,test,test,test,test
+GSM9509171,B5,test,test,test,test,test
+GSM9509173,B1,test,test,test,test,test
+GSM9509174,B1,test,test,test,test,test

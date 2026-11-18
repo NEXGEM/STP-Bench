@@ -96,12 +96,12 @@ config to `stpbench` afterward.
 ## Step 3 — Run preprocessing
 
 ```python
-stp = STPred(models=["StNet"])   # any cheap model — preprocess() covers every configured model
+stp = STPred(models=["LinearProb"])   # any cheap model — preprocess() covers every configured model
 stp.preprocess(data="<namespace>/<name>")
 ```
 
 Runs, in order: raw preprocessing (patches/expression) → gene set selection
-(`<meta_dir>/<gene_type>_<num_genes>genes.json`) → CV split assignment
+(set `<gene_type>_<num_genes>` in `<meta_dir>/genes.json`) → CV split assignment
 (`<meta_dir>/ids.csv` with `fold_*` columns) → feature extraction
 (`<data_dir>/emb/<feature_type>/features_<model_name>/`).
 
@@ -117,16 +117,15 @@ This catches missing/misconfigured paths before committing GPU time.
 
 - `<meta_dir>/ids.csv` has a `sample_id` column plus one `fold_N` column per
   requested fold, and every raw sample appears exactly once.
-- `<meta_dir>/<gene_type>_<num_genes>genes.json` exists with exactly
-  `num_genes` entries. Gene set preparation (`src/preprocess/get_geneset.py`)
-  *also* always writes `<meta_dir>/total_<N>genes.json` (every common gene
-  across the cohort, unrelated to `num_genes` — this is what models like
-  `BrSTNet` read for an auxiliary full-panel output) regardless of
-  `preprocess.geneset`/method. Check for the specific `<gene_type>_<num_genes>`
-  file by name, not just "a genes.json exists" — the pipeline's own
-  skip-if-done check (`DataPipeline._has_genesets`) globs for *any*
-  `*genes.json`, so a stray `total_*.json` left over from a previous run can
-  silently mask a missing primary panel file on a re-run.
+  Fold values are `train`/`val`; fixed held-out samples (if any) are `test` in every fold
+  and are read via `src/ids_io.read_ids`.
+- `<meta_dir>/genes.json` (`{"sets": {"<gene_type>_<N>": {"genes": [...]}, "total": ...}}`) has the
+  set `<gene_type>_<num_genes>` with exactly `num_genes` entries. Gene set preparation
+  (`src/preprocess/get_geneset.py`) *also* always writes the `total` set (every common gene
+  across the cohort — read by models like `BrSTNet` for an auxiliary full-panel output).
+  Read sets via `src/genes_io` (`read_genes`, `has_genes`); check the specific key, not just
+  "a genes.json exists" — `DataPipeline._has_genesets` could otherwise be masked by a stray `total`
+  set left from a previous run. Legacy `<type>_<N>genes.json` files are still read as a fallback.
 - `<data_dir>/patches/<sample_id>.h5` and `<data_dir>/st/<sample_id>.h5ad`
   exist for every sample.
 - Run an actual train + evaluate on one cheap model end to end

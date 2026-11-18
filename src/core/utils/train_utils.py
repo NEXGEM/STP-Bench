@@ -1,6 +1,7 @@
 import csv
 import io
 import os
+from genes_io import gene_ref
 import random
 import re
 import sys
@@ -619,7 +620,8 @@ def run_inference(cfg):
 
     data_dir = cfg.DATA.data_dir
     meta_dir = cfg.DATA.get('meta_dir', data_dir)
-    ids = pd.read_csv(f"{meta_dir}/ids.csv")['sample_id'].tolist()
+    from ids_io import read_ids
+    ids = read_ids(meta_dir)['sample_id'].tolist()
     
     ids_to_predict = []
     for _id in ids:
@@ -779,9 +781,7 @@ def setup_config(args):
             cfg.DATA.load_level = load_level
 
         train_meta_dir = cfg.DATA.get('meta_dir', cfg.DATA.train_data_dir)
-        cfg.MODEL.gene_path = f"{train_meta_dir}/{cfg.DATA.gene_type}_{cfg.DATA.num_genes}genes.json"
-        if not os.path.isfile(cfg.MODEL.gene_path):
-            cfg.MODEL.gene_path = f"{cfg.DATA.train_data_dir}/{cfg.DATA.gene_type}_{cfg.DATA.num_genes}genes.json"
+        cfg.MODEL.gene_path = gene_ref(train_meta_dir, cfg.DATA.gene_type, cfg.DATA.num_genes)
 
         if getattr(args, 'fold', None) is not None:
             cfg.DATA.fold = args.fold
@@ -896,9 +896,7 @@ def setup_config(args):
             cfg.MODEL.ckpt_path = ckpt_path
             train_data_dir = cfg.DATA.get('train_data_dir', cfg.DATA.get('ref_data_dir', cfg.DATA.data_dir))
             train_meta_dir = cfg.DATA.get('meta_dir', train_data_dir)
-            cfg.MODEL.gene_path = f"{train_meta_dir}/{cfg.DATA.gene_type}_{cfg.DATA.num_genes}genes.json"
-            if not os.path.isfile(cfg.MODEL.gene_path):
-                cfg.MODEL.gene_path = f"{train_data_dir}/{cfg.DATA.gene_type}_{cfg.DATA.num_genes}genes.json"
+            cfg.MODEL.gene_path = gene_ref(train_meta_dir, cfg.DATA.gene_type, cfg.DATA.num_genes)
 
         else:
             cfg.MODEL.ckpt_path = None
@@ -927,9 +925,7 @@ def setup_config(args):
                 raise ValueError("Please specify the fold for inference when not fine-tuning.")
 
             train_meta_dir = cfg.DATA.get('meta_dir', cfg.DATA.train_data_dir)
-            cfg.MODEL.gene_path = f"{train_meta_dir}/{cfg.DATA.gene_type}_{cfg.DATA.num_genes}genes.json"
-            if not os.path.isfile(cfg.MODEL.gene_path):
-                cfg.MODEL.gene_path = f"{cfg.DATA.train_data_dir}/{cfg.DATA.gene_type}_{cfg.DATA.num_genes}genes.json"
+            cfg.MODEL.gene_path = gene_ref(train_meta_dir, cfg.DATA.gene_type, cfg.DATA.num_genes)
 
         # cfg.DATA.name = cfg.DATA.get('name', cfg.DATA.name)
         # cfg.MODEL.name = cfg.MODEL.get('name', cfg.MODEL.name)

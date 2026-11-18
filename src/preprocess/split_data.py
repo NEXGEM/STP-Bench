@@ -6,7 +6,7 @@ from sklearn.model_selection import KFold, GroupKFold
 
 
 def split_data_cv(df, input_dir, n_splits=5, shuffle=True, random_state=42):
-    """Add fold_N columns to ids.csv for cross-validation splitting."""
+    """Add fold_N columns to ids.csv for cross-validation splitting (labels: train / val; held-out samples are labelled test)."""
     fold_cols = [f"fold_{fold}" for fold in range(n_splits)]
     if all(col in df.columns for col in fold_cols):
         print(f"Fold columns already exist in {input_dir}/ids.csv. Exiting.")
@@ -22,7 +22,7 @@ def split_data_cv(df, input_dir, n_splits=5, shuffle=True, random_state=42):
         split_generator = KFold(n_splits=n_splits, shuffle=shuffle, random_state=random_state).split(df)
 
     for fold, (_, test_idx) in enumerate(split_generator):
-        df.loc[df.index[test_idx], f"fold_{fold}"] = "test"
+        df.loc[df.index[test_idx], f"fold_{fold}"] = "val"
 
     df.to_csv(f'{input_dir}/ids.csv', index=False)
     return df

@@ -2,6 +2,7 @@
 import os
 from glob import glob
 import json
+from genes_io import gene_ref, has_genes, read_genes
 import numpy as np
 from scipy import sparse
 import h5py
@@ -83,11 +84,10 @@ class EGNDataset(STDataset):
             # built from TRAINING data — always use the full training gene
             # panel for it, never genes_override, which only restricts the
             # current (external) sample's own label via self.genes.
-            if not os.path.isfile(f"{ref_data_dir}/{gene_type}_{num_genes}genes.json"):
-                raise ValueError(f"{gene_type}_{num_genes}genes.json is not found in {ref_data_dir}")
+            if not has_genes(ref_data_dir, gene_type, num_genes):
+                raise ValueError(f"gene set not found: {gene_ref(ref_data_dir, gene_type, num_genes)}")
 
-            with open(f"{ref_data_dir}/{gene_type}_{num_genes}genes.json", 'r') as f:
-                genes = json.load(f)['genes']
+            genes = read_genes(ref_data_dir, gene_type, num_genes)
             ref_genes = genes[:num_genes] if gene_type in ['mean', 'hmhvg', 'all'] else genes
 
             self.genes = list(genes_override) if genes_override is not None else ref_genes
@@ -325,8 +325,11 @@ class EGGNDataset(STDataset):
                 all_files = glob(f"{self.asset_dir}/EGGN/{model_name}/fold{fold}/{phase}/graph_6/*.pt")   
         
         self.selected_files = {}
+        wanted = set(getattr(self, 'int2id', {}).values())  # graph dirs of an external eval also hold graphs of other test sets: load only this set's samples
         for i in all_files:
             name = i.split('/')[-1].split('.')[0]
+            if wanted and name not in wanted:
+                continue
             graph = torch.load(i, weights_only=False)
             self.selected_files[name] = graph
             # self.selected_files.append(graph)
@@ -384,11 +387,9 @@ class SGNDataset(STDataset):
         gene_indices = None
         if genes_override is not None:
             panel_dir = ref_data_dir or meta_dir or data_dir
-            panel_path = f"{panel_dir}/{gene_type}_{num_genes}genes.json"
-            if not os.path.isfile(panel_path):
-                raise ValueError(f"{gene_type}_{num_genes}genes.json is not found in {panel_dir}")
-            with open(panel_path, 'r') as f:
-                panel_genes = json.load(f)['genes'][:num_genes]
+            if not has_genes(panel_dir, gene_type, num_genes):
+                raise ValueError(f"gene set not found: {gene_ref(panel_dir, gene_type, num_genes)}")
+            panel_genes = read_genes(panel_dir, gene_type, num_genes)[:num_genes]
             panel_index = {gene: i for i, gene in enumerate(panel_genes)}
             missing = [g for g in genes_override if g not in panel_index]
             if missing:
@@ -411,8 +412,11 @@ class SGNDataset(STDataset):
                 all_files = glob(f"{self.asset_dir}/SGN/{model_name}/fold{fold}/{phase}/graph/*.pt")   
 
         self.selected_files = {}
+        wanted = set(getattr(self, 'int2id', {}).values())  # graph dirs of an external eval also hold graphs of other test sets: load only this set's samples
         for i in all_files:
             name = i.split('/')[-1].split('.')[0]
+            if wanted and name not in wanted:
+                continue
             graph = torch.load(i, weights_only=False)
             if gene_indices is not None:
                 y_dim = graph['window'].y.shape[-1]

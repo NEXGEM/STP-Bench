@@ -1,4 +1,10 @@
 import os
+import sys as _sys
+_p = os.path.abspath(__file__)
+while os.path.basename(_p) != "src" and _p != os.path.dirname(_p):
+    _p = os.path.dirname(_p)
+_sys.path.insert(0, _p)
+from ids_io import read_ids, phase_label
 from tqdm import tqdm 
 
 import argparse
@@ -15,11 +21,11 @@ def _read_ids(data_dir, phase, fold):
         return pd.read_csv(split_path)
 
     ids_path = os.path.join(data_dir, "ids.csv")
-    ids = pd.read_csv(ids_path)
+    ids = read_ids(data_dir)
     fold_col = f"fold_{fold}"
     if fold_col not in ids.columns:
         raise FileNotFoundError(f"{split_path} not found and {fold_col} is missing from {ids_path}")
-    return ids.loc[ids[fold_col].astype(str).str.lower() == phase].reset_index(drop=True)
+    return ids.loc[ids[fold_col].astype(str).str.lower() == phase_label(ids, phase)].reset_index(drop=True)
 
 
 def _num_folds(data_dir):

@@ -1,0 +1,61 @@
+{
+ "sets": {
+  "eval": {
+   "genes": [
+    "FASN",
+    "KRT14",
+    "SERPINA3",
+    "POSTN",
+    "KRT7",
+    "KRT8",
+    "LUM",
+    "MLPH",
+    "TOMM7",
+    "GATA3",
+    "APOC1",
+    "DSP",
+    "CD9",
+    "ACTA2",
+    "KRT5",
+    "TACSTD2",
+    "S100A14",
+    "MMP2",
+    "LDHB",
+    "FOXA1",
+    "CCND1",
+    "ERBB2",
+    "C1QA",
+    "FLNB",
+    "SCD",
+    "FBLN1",
+    "LYZ",
+    "S100A4",
+    "KRT6B",
+    "C15orf48",
+    "EPCAM",
+    "ESR1",
+    "TPD52",
+    "JUP",
+    "TMEM147",
+    "MYBPC1",
+    "AGR3",
+    "EIF4EBP1",
+    "CDH1",
+    "ENAH",
+    "HMGA1",
+    "CCDC80",
+    "CXCL12",
+    "PDGFRB"
+   ],
+   "train_set": "wustl/BRCA",
+   "test_set": "external/hest/BRCA_visium_hd",
+   "condition": "cross_platform_visium_to_visium_hd",
+   "panel": "platform_fixed44",
+   "samples": [
+    "TENX161",
+    "TENX162",
+    "TENX180"
+   ]
+  }
+ }
+}

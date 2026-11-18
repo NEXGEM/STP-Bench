@@ -8,7 +8,6 @@ from .brstnet import BrSTNetDataset
 from .sepal import SepalDataset
 from .stem import StemDataset
 from .bleep import BleepDataset
-from .m2ort import M2OSTDataset
 from .triplex import TriDataset, GlobalDataset, StrideDataset
 from .stpath import STPathDataset
 from .deepspotm import DeepSpotMDataset
