@@ -30,7 +30,8 @@ class StemDataset(STDataset):
                 smooth: bool = False,
                 data_id: str = None,
                 model_name: str = 'uni_v2',
-                load_level: str = 'patch' # 'patch' or 'slide'
+                load_level: str = 'patch', # 'patch' or 'slide'
+                genes_override: list = None,
                 ):
         super(StemDataset, self).__init__(
                                 mode=mode,
@@ -46,7 +47,8 @@ class StemDataset(STDataset):
                                 smooth=smooth,
                                 data_id=data_id,
                                 model_name=model_name,
-                                load_level=load_level
+                                load_level=load_level,
+                                genes_override=genes_override
                                 )
 
         # Stem predicts a whole slide per call (its test branches return every spot's embedding

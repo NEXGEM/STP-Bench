@@ -10,6 +10,9 @@ notebooks/
 # call; not meant to be hand-edited or committed.
 config/data/_wsi_predict/
 
+# Generated `<name>_holdout` aliases of ids.csv/genes.json (ids_io.ensure_holdout_alias)
+input/**/*_holdout/
+
 # GPUDirect Storage compat-mode log, written to the repo root whenever
 # preprocessing runs on a machine without the nvidia-fs driver loaded.
 cufile.log
@@ -26,3 +29,6 @@ weights/
 
 *.pyc
 __pycache__/
+
+# local Python environment created by scripts/create_env.sh
+.stpbench/

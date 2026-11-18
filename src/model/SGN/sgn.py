@@ -46,8 +46,8 @@ class SGN(nn.Module):
         # self.gene = np.array(load_pickle(f"{gene_path}/gene.pkl"))
         self.non_negative_output = non_negative_output
         
-        with open(gene_path, 'r') as f:
-            genes = json.load(f)['genes']
+        from genes_io import read_genes_path
+        genes = read_genes_path(gene_path)
         self.genes = np.array(genes)
             
         self.gene2name = load_pickle(f"{gene2name_path}/gene2name.pkl")

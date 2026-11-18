@@ -29,6 +29,16 @@ from .genesets import load_gene_sets
 from .scoring import safe_corr, score_pathways
 
 
+def _samples(cfg):
+    """`use_all_pred_samples: true` = every sample with a prediction file (holdout sets: all samples are test for every fold's model)."""
+    if cfg.DATA.downstream.get("use_all_pred_samples"):
+        import os
+        from glob import glob
+
+        return sorted(os.path.splitext(os.path.basename(p))[0] for p in glob(os.path.join(cfg.DATA.pred_path_fold, "*.h5ad")))
+    return list_fold_samples(cfg)
+
+
 def _sample_rows(pred_adata, gt_adata, gene_sets, overlap_counts, min_overlap, method, sample_id) -> List[Dict[str, Any]]:
     common_genes = [g for g in pred_adata.var_names if g in set(gt_adata.var_names)]
     if not common_genes:
@@ -90,7 +100,7 @@ def evaluate_gene_enrichment(cfg) -> Dict[str, Any]:
     method = params.get("score_method", "rank_mean")
 
     all_rows: List[Dict[str, Any]] = []
-    for sample_id in list_fold_samples(cfg):
+    for sample_id in _samples(cfg):
         try:
             pred_adata = load_pred_adata(cfg.DATA.pred_path_fold, sample_id)
             gt_adata = load_gt_adata(cfg.DATA.data_dir, sample_id)

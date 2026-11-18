@@ -5,7 +5,7 @@ Expected `cfg` shape (an addict.Dict, built by
 
     cfg.DATA.pred_path_fold   # "{output_dir}/{data}/{model}/[{train_data}/]fold{k}"
     cfg.DATA.cpm              # bool — whether predictions are log1p(CPM) or log1p(raw)
-    cfg.MODEL.gene_path       # trained gene panel json ({"genes": [...]})
+    cfg.MODEL.gene_path       # trained gene panel, "<meta_dir>/genes.json#<gene_type>_<num_genes>"
     cfg.DATA.downstream       # merged gene_enrichment params: library, score_method,
                               # min_overlap, cache_dir (see config/downstream/defaults.yaml)
 """
@@ -29,6 +29,16 @@ from .genesets import load_gene_sets
 from .scoring import score_pathways
 
 
+def _samples(cfg):
+    """`use_all_pred_samples: true` = every sample with a prediction file (holdout sets: all samples are test for every fold's model)."""
+    if cfg.DATA.downstream.get("use_all_pred_samples"):
+        import os
+        from glob import glob
+
+        return sorted(os.path.splitext(os.path.basename(p))[0] for p in glob(os.path.join(cfg.DATA.pred_path_fold, "*.h5ad")))
+    return list_fold_samples(cfg)
+
+
 def run_gene_enrichment(cfg) -> Dict[str, Any]:
     params = cfg.DATA.downstream
     genes = load_gene_panel(cfg.MODEL.gene_path)
@@ -50,7 +60,7 @@ def run_gene_enrichment(cfg) -> Dict[str, Any]:
 
     method = params.get("score_method", "rank_mean")
     manifest: Dict[str, str] = {}
-    for sample_id in list_fold_samples(cfg):
+    for sample_id in _samples(cfg):
         pred_adata = load_pred_adata(cfg.DATA.pred_path_fold, sample_id)
         pred_adata = subset_to_genes(pred_adata, genes)
         pred_adata = to_log_scale(pred_adata, source="pred", cpm=cfg.DATA.get("cpm", False))

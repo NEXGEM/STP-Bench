@@ -89,8 +89,37 @@ def _clamp_qc_metrics_percent_top():
     sc.pp.calculate_qc_metrics = _patched
 
 
+def _relax_hest_downscaled_check():
+    """HESTData._verify_format raises ValueError("Downscaled image missing in adata.obs")
+    when adata.uns['spatial']['ST']['images']['downscaled_fullres'] is absent (e.g. h5ad files
+    built from raw GEO data). That image is only used by hest for preview/QC plots
+    (dump_metrics, visualizations), never for patching or embeddings, so the missing image only
+    produces a warning here and processing continues. Patched once, process-wide."""
+    try:
+        from hest.HESTData import HESTData
+    except ImportError:
+        return
+    if getattr(HESTData._verify_format, '_stpbench_patched', False):
+        return
+    _orig = HESTData._verify_format
+
+    def _patched(self, adata):
+        try:
+            return _orig(self, adata)
+        except ValueError as exc:
+            if 'Downscaled image missing' not in str(exc):
+                raise
+            import warnings
+            warnings.warn("adata has no uns['spatial']['ST']['images']['downscaled_fullres'] "
+                          "(only used for hest preview plots); continuing without it.")
+
+    _patched._stpbench_patched = True
+    HESTData._verify_format = _patched
+
+
 def _iter_hest(*args, **kwargs):
     _clamp_qc_metrics_percent_top()
+    _relax_hest_downscaled_check()
     try:
         from hest import iter_hest
     except ImportError as exc:

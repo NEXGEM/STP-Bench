@@ -1,0 +1,1847 @@
+description: 'External-evaluation design: for every internal training dataset (input/<institution>/<set>),
+  which external test sets (input/external/...) to use under three conditions:'
+conditions:
+  cross_institution: same tissue, same platform, different institution
+  cross_tissue: different tissue, same platform, different institution
+  cross_tissue_same_institution: different tissue, same platform, SAME institution (added 2026-10-26 for the 3 pairs cross_tissue
+    drops by the institution rule; test samples of the training institution are kept)
+  cross_platform_xenium_to_visium: same tissue, different platform (xenium -> visium), different institution
+  cross_platform_xenium_to_visium_hd: same tissue, different platform (xenium -> visium_hd), different institution
+  cross_platform_visium_to_xenium: same tissue, different platform (visium -> xenium), different institution
+  cross_platform_visium_to_visium_hd: same tissue, different platform (visium -> visium_hd), different institution
+rules:
+  overlap: test samples in the training set or its internal holdout are removed
+  institution: test samples from the training institution are removed
+  min_genes_measured:
+    Visium: 10000
+    Visium HD: 10000
+    Xenium: 150
+  cross_platform_tissues: 'tissues whose external sets include all of [''Visium'', ''Visium HD'', ''Xenium'']: [''Breast'',
+    ''Colorectal'', ''Lung'']'
+  gene_sets: 'per training set, one gene set for cross_institution + cross_tissue (also used for the internal holdout; Visium:
+    top 200 by hmhvg rank, Xenium: whole intersection) and one for cross_platform (whole intersection of the training panel
+    over its test samples)'
+  excluded_pairs:
+    wustl/PDAC -> external/hest/PAAD_xenium: only 2 hmhvg_200 genes measured
+  same_institution_extra: cross_tissue_same_institution = lausanne/breast_xenium -> external/lausanne/LUNG_xenium, wustl/BRCA
+    -> external/wustl/RCC, wustl/PDAC -> external/wustl/RCC. Added by scripts/make_cross_external_same_institution.py (input/cross_external/manifest_same_institution.csv;
+    the main manifest.csv is unchanged). Not produced by scripts/make_external_design.py.
+  institution_10x: 10x Genomics demo data and Janesick 2023 (10x) samples = one institution
+  same_platform_controls: cross_platform_xenium_to_xenium and cross_platform_visium_to_visium dropped on 2026-10-27; the cross_platform
+    gene set of a training set is the intersection over its different-platform test sets only
+external_sets:
+  external/hest/BRCA_visium:
+    tissue: Breast
+    platform: Visium
+    institutions:
+    - 10x Genomics
+    oncotree:
+    - IDC
+    - ILC
+    n_samples: 7
+  external/hest/BRCA_visium_hd:
+    tissue: Breast
+    platform: Visium HD
+    institutions:
+    - 10x Genomics
+    oncotree:
+    - IDC
+    n_samples: 3
+  external/hest/BRCA_xenium:
+    tissue: Breast
+    platform: Xenium
+    institutions:
+    - 10x Genomics
+    oncotree:
+    - IDC
+    - ILC
+    n_samples: 9
+  external/hest/CRC_visium:
+    tissue: Colorectal
+    platform: Visium
+    institutions:
+    - 10x Genomics
+    - Roche (Valdeolivas 2023)
+    oncotree:
+    - COAD
+    - COADREAD
+    - READ
+    n_samples: 21
+  external/hest/CRC_visium_hd:
+    tissue: Colorectal
+    platform: Visium HD
+    institutions:
+    - 10x Genomics
+    oncotree:
+    - COAD
+    n_samples: 4
+  external/hest/CRC_xenium:
+    tissue: Colorectal
+    platform: Xenium
+    institutions:
+    - 10x Genomics
+    oncotree:
+    - COAD
+    - COADREAD
+    n_samples: 5
+  external/hest/GBM_visium:
+    tissue: Brain
+    platform: Visium
+    institutions:
+    - 10x Genomics
+    oncotree:
+    - GBM
+    n_samples: 3
+  external/hest/LUNG_visium:
+    tissue: Lung
+    platform: Visium
+    institutions:
+    - 10x Genomics
+    oncotree:
+    - LNET
+    - LUSC
+    n_samples: 2
+  external/hest/LUNG_visium_hd:
+    tissue: Lung
+    platform: Visium HD
+    institutions:
+    - 10x Genomics
+    oncotree:
+    - LUAD
+    n_samples: 5
+  external/hest/PAAD_visium:
+    tissue: Pancreas
+    platform: Visium
+    institutions:
+    - Nat Commun 2023 PDAC Schwann (s41467-023-40314-w)
+    oncotree:
+    - PAAD
+    n_samples: 4
+  external/hest/PAAD_xenium:
+    tissue: Pancreas
+    platform: Xenium
+    institutions:
+    - 10x Genomics
+    oncotree:
+    - PAAD
+    n_samples: 3
+  external/hest/PRAD_visium:
+    tissue: Prostate
+    platform: Visium
+    institutions:
+    - 10x Genomics
+    - KTH/SciLifeLab
+    - MGB
+    oncotree:
+    - PRAD
+    - nan
+    n_samples: 34
+  external/lausanne/LUNG_xenium:
+    tissue: Lung
+    platform: Xenium
+    institutions:
+    - Lausanne
+    oncotree:
+    - None
+    n_samples: 6
+  external/wustl/RCC:
+    tissue: Kidney
+    platform: Visium
+    institutions:
+    - WUSTL
+    oncotree:
+    - CCRCC
+    n_samples: 10
+design:
+  hest/CCRCC:
+    institution: Meylan 2022 (Paris)
+    tissue: Kidney
+    platform: Visium
+    n_train_samples: 19
+    internal_holdout: hest/CCRCC_holdout
+    trained_models_available: true
+    panels:
+      hmhvg_1000: 1000
+      hmhvg_200: 200
+    cross_institution:
+    - test_set: external/wustl/RCC
+      tissue: Kidney
+      platform: Visium
+      institutions:
+      - WUSTL
+      oncotree:
+      - CCRCC
+      n_samples: 10
+      n_cases: 10
+      samples:
+      - HTA12_51_1
+      - HTA12_64_1
+      - HTA12_256_2
+      - HTA12_274_1
+      - HTA12_275_1
+      - HTA12_294_1
+      - HTA12_295_1
+      - HTA12_296_1
+      - HTA12_297_1
+      - HTA12_298_1
+      genes_measured_in_all: 15091
+      genes_eval_pair:
+        hmhvg_1000: 983
+        hmhvg_200: 193
+      gene_files:
+        fixed200: input/cross_external/cross_institution/hest-CCRCC__to__wustl-RCC/genes.json#eval
+      genes_eval:
+        fixed200: 200
+    cross_tissue:
+    - test_set: external/hest/BRCA_visium
+      tissue: Breast
+      platform: Visium
+      institutions:
+      - 10x Genomics
+      oncotree:
+      - IDC
+      - ILC
+      n_samples: 7
+      n_cases: 6
+      samples:
+      - NCBI776
+      - TENX13
+      - TENX14
+      - TENX24
+      - TENX39
+      - TENX53
+      - TENX68
+      genes_measured_in_all: 14366
+      genes_eval_pair:
+        hmhvg_1000: 936
+        hmhvg_200: 184
+      gene_files:
+        fixed200: input/cross_external/cross_tissue/hest-CCRCC__to__hest-BRCA_visium/genes.json#eval
+      genes_eval:
+        fixed200: 200
+    - test_set: external/hest/CRC_visium
+      tissue: Colorectal
+      platform: Visium
+      institutions:
+      - 10x Genomics
+      - Roche (Valdeolivas 2023)
+      oncotree:
+      - COAD
+      - COADREAD
+      - READ
+      n_samples: 20
+      n_cases: 14
+      samples:
+      - TENX152
+      - TENX29
+      - TENX49
+      - TENX70
+      - TENX89
+      - TENX90
+      - TENX91
+      - TENX92
+      - ZEN36
+      - ZEN38
+      - ZEN39
+      - ZEN40
+      - ZEN42
+      - ZEN43
+      - ZEN44
+      - ZEN45
+      - ZEN46
+      - ZEN47
+      - ZEN48
+      - ZEN49
+      genes_measured_in_all: 12753
+      genes_eval_pair:
+        hmhvg_1000: 929
+        hmhvg_200: 184
+      excluded:
+        TENX28: targeted / small panel (1134 genes measured)
+      gene_files:
+        fixed200: input/cross_external/cross_tissue/hest-CCRCC__to__hest-CRC_visium/genes.json#eval
+      genes_eval:
+        fixed200: 200
+    - test_set: external/hest/GBM_visium
+      tissue: Brain
+      platform: Visium
+      institutions:
+      - 10x Genomics
+      oncotree:
+      - GBM
+      n_samples: 2
+      n_cases: 2
+      samples:
+      - TENX31
+      - TENX73
+      genes_measured_in_all: 16192
+      genes_eval_pair:
+        hmhvg_1000: 955
+        hmhvg_200: 189
+      excluded:
+        TENX30: targeted / small panel (1198 genes measured)
+      gene_files:
+        fixed200: input/cross_external/cross_tissue/hest-CCRCC__to__hest-GBM_visium/genes.json#eval
+      genes_eval:
+        fixed200: 200
+      warnings:
+      - fewer than 3 samples
+    - test_set: external/hest/LUNG_visium
+      tissue: Lung
+      platform: Visium
+      institutions:
+      - 10x Genomics
+      oncotree:
+      - LNET
+      - LUSC
+      n_samples: 2
+      n_cases: 2
+      samples:
+      - TENX62
+      - TENX72
+      genes_measured_in_all: 18065
+      genes_eval_pair:
+        hmhvg_1000: 958
+        hmhvg_200: 189
+      gene_files:
+        fixed200: input/cross_external/cross_tissue/hest-CCRCC__to__hest-LUNG_visium/genes.json#eval
+      genes_eval:
+        fixed200: 200
+      warnings:
+      - fewer than 3 samples
+    - test_set: external/hest/PAAD_visium
+      tissue: Pancreas
+      platform: Visium
+      institutions:
+      - Nat Commun 2023 PDAC Schwann (s41467-023-40314-w)
+      oncotree:
+      - PAAD
+      n_samples: 4
+      n_cases: 4
+      samples:
+      - NCBI569
+      - NCBI570
+      - NCBI571
+      - NCBI572
+      genes_measured_in_all: 16592
+      genes_eval_pair:
+        hmhvg_1000: 967
+        hmhvg_200: 197
+      gene_files:
+        fixed200: input/cross_external/cross_tissue/hest-CCRCC__to__hest-PAAD_visium/genes.json#eval
+      genes_eval:
+        fixed200: 200
+    - test_set: external/hest/PRAD_visium
+      tissue: Prostate
+      platform: Visium
+      institutions:
+      - 10x Genomics
+      - KTH/SciLifeLab
+      - MGB
+      oncotree:
+      - PRAD
+      - nan
+      n_samples: 34
+      n_cases: 13
+      samples:
+      - INT25
+      - INT26
+      - INT27
+      - INT28
+      - INT35
+      - MEND139
+      - MEND140
+      - MEND141
+      - MEND142
+      - MEND143
+      - MEND144
+      - MEND145
+      - MEND146
+      - MEND147
+      - MEND148
+      - MEND149
+      - MEND150
+      - MEND151
+      - MEND152
+      - MEND153
+      - MEND154
+      - MEND156
+      - MEND157
+      - MEND158
+      - MEND159
+      - MEND160
+      - MEND161
+      - MEND162
+      - MEND59
+      - MEND60
+      - MEND61
+      - MEND62
+      - TENX40
+      - TENX46
+      genes_measured_in_all: 12816
+      genes_eval_pair:
+        hmhvg_1000: 951
+        hmhvg_200: 193
+      gene_files:
+        fixed200: input/cross_external/cross_tissue/hest-CCRCC__to__hest-PRAD_visium/genes.json#eval
+      genes_eval:
+        fixed200: 200
+    cross_platform_xenium_to_visium: []
+    cross_platform_xenium_to_visium_hd: []
+    cross_platform_visium_to_xenium: []
+    cross_platform_visium_to_visium_hd: []
+    gene_sets:
+      institution_tissue:
+        fixed200: 200
+    internal_gene_file: input/hest/CCRCC/genes.json#eval_fixed200
+  lausanne/breast_xenium:
+    institution: Lausanne
+    tissue: Breast
+    platform: Xenium
+    n_train_samples: 11
+    internal_holdout: lausanne/breast_xenium_holdout
+    trained_models_available: true
+    panels:
+      total_280: 280
+      hmhvg_200: 200
+    cross_institution:
+    - test_set: external/hest/BRCA_xenium
+      tissue: Breast
+      platform: Xenium
+      institutions:
+      - 10x Genomics
+      oncotree:
+      - IDC
+      - ILC
+      n_samples: 9
+      n_cases: 7
+      samples:
+      - NCBI783
+      - NCBI784
+      - NCBI785
+      - TENX94
+      - TENX95
+      - TENX96
+      - TENX97
+      - TENX98
+      - TENX99
+      genes_measured_in_all: 408
+      genes_eval_pair:
+        total_280: 280
+        hmhvg_200: 200
+      gene_files:
+        fixed35: input/cross_external/cross_institution/lausanne-breast_xenium__to__hest-BRCA_xenium/genes.json#eval
+      genes_eval:
+        fixed35: 35
+      warnings:
+      - fewer than 50 genes evaluated
+    cross_tissue:
+    - test_set: external/hest/CRC_xenium
+      tissue: Colorectal
+      platform: Xenium
+      institutions:
+      - 10x Genomics
+      oncotree:
+      - COAD
+      - COADREAD
+      n_samples: 5
+      n_cases: 5
+      samples:
+      - TENX111
+      - TENX139
+      - TENX147
+      - TENX148
+      - TENX149
+      genes_measured_in_all: 160
+      genes_eval_pair:
+        total_280: 42
+        hmhvg_200: 23
+      gene_files:
+        fixed35: input/cross_external/cross_tissue/lausanne-breast_xenium__to__hest-CRC_xenium/genes.json#eval
+      genes_eval:
+        fixed35: 35
+      warnings:
+      - fewer than 50 genes evaluated
+    - test_set: external/hest/PAAD_xenium
+      tissue: Pancreas
+      platform: Xenium
+      institutions:
+      - 10x Genomics
+      oncotree:
+      - PAAD
+      n_samples: 3
+      n_cases: 3
+      samples:
+      - TENX116
+      - TENX126
+      - TENX140
+      genes_measured_in_all: 159
+      genes_eval_pair:
+        total_280: 57
+        hmhvg_200: 33
+      gene_files:
+        fixed35: input/cross_external/cross_tissue/lausanne-breast_xenium__to__hest-PAAD_xenium/genes.json#eval
+      genes_eval:
+        fixed35: 35
+      warnings:
+      - fewer than 50 genes evaluated
+    cross_tissue_same_institution:
+    - test_set: external/lausanne/LUNG_xenium
+      tissue: Lung
+      platform: Xenium
+      institutions:
+      - Lausanne
+      oncotree:
+      - None
+      n_samples: 6
+      n_cases: 6
+      samples:
+      - GSM9509134
+      - GSM9509135
+      - GSM9509136
+      - GSM9509137
+      - GSM9509138
+      - GSM9509139
+      gene_files:
+        fixed35: input/cross_external/cross_tissue_same_institution/lausanne-breast_xenium__to__lausanne-LUNG_xenium/genes.json#eval
+      genes_eval:
+        fixed35: 28
+      note: same institution as the training set (excluded from cross_tissue by the institution rule); gene list = the training
+        set cross_tissue list restricted to genes measured in every sample
+    cross_platform_xenium_to_visium:
+    - test_set: external/hest/BRCA_visium
+      tissue: Breast
+      platform: Visium
+      institutions:
+      - 10x Genomics
+      oncotree:
+      - IDC
+      - ILC
+      n_samples: 7
+      n_cases: 6
+      samples:
+      - NCBI776
+      - TENX13
+      - TENX14
+      - TENX24
+      - TENX39
+      - TENX53
+      - TENX68
+      genes_measured_in_all: 14366
+      genes_eval_pair:
+        total_280: 260
+        hmhvg_200: 187
+      gene_files:
+        platform_fixed257: input/cross_external/cross_platform_xenium_to_visium/lausanne-breast_xenium__to__hest-BRCA_visium/genes.json#eval
+      genes_eval:
+        platform_fixed257: 257
+    cross_platform_xenium_to_visium_hd:
+    - test_set: external/hest/BRCA_visium_hd
+      tissue: Breast
+      platform: Visium HD
+      institutions:
+      - 10x Genomics
+      oncotree:
+      - IDC
+      n_samples: 3
+      n_cases: 3
+      samples:
+      - TENX161
+      - TENX162
+      - TENX180
+      genes_measured_in_all: 15554
+      genes_eval_pair:
+        total_280: 270
+        hmhvg_200: 196
+      gene_files:
+        platform_fixed257: input/cross_external/cross_platform_xenium_to_visium_hd/lausanne-breast_xenium__to__hest-BRCA_visium_hd/genes.json#eval
+      genes_eval:
+        platform_fixed257: 257
+    cross_platform_visium_to_xenium: []
+    cross_platform_visium_to_visium_hd: []
+    no_usable_samples:
+    - condition: cross_tissue
+      test_set: external/lausanne/LUNG_xenium
+      excluded:
+        GSM9509134: same institution
+        GSM9509135: same institution
+        GSM9509136: same institution
+        GSM9509137: same institution
+        GSM9509138: same institution
+        GSM9509139: same institution
+    gene_sets:
+      institution_tissue:
+        fixed35: 35
+      cross_platform:
+        platform_fixed257: 257
+    internal_gene_file: input/lausanne/breast_xenium/genes.json#eval_fixed35
+  ncche/visium:
+    institution: NCCHE
+    tissue: Lung
+    platform: Visium
+    n_train_samples: 30
+    internal_holdout: ncche/visium_holdout
+    trained_models_available: true
+    panels:
+      hmhvg_1000: 1000
+      hmhvg_200: 200
+    cross_institution:
+    - test_set: external/hest/LUNG_visium
+      tissue: Lung
+      platform: Visium
+      institutions:
+      - 10x Genomics
+      oncotree:
+      - LNET
+      - LUSC
+      n_samples: 2
+      n_cases: 2
+      samples:
+      - TENX62
+      - TENX72
+      genes_measured_in_all: 18065
+      genes_eval_pair:
+        hmhvg_1000: 965
+        hmhvg_200: 184
+      gene_files:
+        fixed200: input/cross_external/cross_institution/ncche-visium__to__hest-LUNG_visium/genes.json#eval
+      genes_eval:
+        fixed200: 200
+      warnings:
+      - fewer than 3 samples
+    cross_tissue:
+    - test_set: external/hest/BRCA_visium
+      tissue: Breast
+      platform: Visium
+      institutions:
+      - 10x Genomics
+      oncotree:
+      - IDC
+      - ILC
+      n_samples: 7
+      n_cases: 6
+      samples:
+      - NCBI776
+      - TENX13
+      - TENX14
+      - TENX24
+      - TENX39
+      - TENX53
+      - TENX68
+      genes_measured_in_all: 14366
+      genes_eval_pair:
+        hmhvg_1000: 944
+        hmhvg_200: 176
+      gene_files:
+        fixed200: input/cross_external/cross_tissue/ncche-visium__to__hest-BRCA_visium/genes.json#eval
+      genes_eval:
+        fixed200: 200
+    - test_set: external/hest/CRC_visium
+      tissue: Colorectal
+      platform: Visium
+      institutions:
+      - 10x Genomics
+      - Roche (Valdeolivas 2023)
+      oncotree:
+      - COAD
+      - COADREAD
+      - READ
+      n_samples: 20
+      n_cases: 14
+      samples:
+      - TENX152
+      - TENX29
+      - TENX49
+      - TENX70
+      - TENX89
+      - TENX90
+      - TENX91
+      - TENX92
+      - ZEN36
+      - ZEN38
+      - ZEN39
+      - ZEN40
+      - ZEN42
+      - ZEN43
+      - ZEN44
+      - ZEN45
+      - ZEN46
+      - ZEN47
+      - ZEN48
+      - ZEN49
+      genes_measured_in_all: 12753
+      genes_eval_pair:
+        hmhvg_1000: 935
+        hmhvg_200: 169
+      excluded:
+        TENX28: targeted / small panel (1134 genes measured)
+      gene_files:
+        fixed200: input/cross_external/cross_tissue/ncche-visium__to__hest-CRC_visium/genes.json#eval
+      genes_eval:
+        fixed200: 200
+    - test_set: external/hest/GBM_visium
+      tissue: Brain
+      platform: Visium
+      institutions:
+      - 10x Genomics
+      oncotree:
+      - GBM
+      n_samples: 2
+      n_cases: 2
+      samples:
+      - TENX31
+      - TENX73
+      genes_measured_in_all: 16192
+      genes_eval_pair:
+        hmhvg_1000: 959
+        hmhvg_200: 182
+      excluded:
+        TENX30: targeted / small panel (1198 genes measured)
+      gene_files:
+        fixed200: input/cross_external/cross_tissue/ncche-visium__to__hest-GBM_visium/genes.json#eval
+      genes_eval:
+        fixed200: 200
+      warnings:
+      - fewer than 3 samples
+    - test_set: external/hest/PAAD_visium
+      tissue: Pancreas
+      platform: Visium
+      institutions:
+      - Nat Commun 2023 PDAC Schwann (s41467-023-40314-w)
+      oncotree:
+      - PAAD
+      n_samples: 4
+      n_cases: 4
+      samples:
+      - NCBI569
+      - NCBI570
+      - NCBI571
+      - NCBI572
+      genes_measured_in_all: 16592
+      genes_eval_pair:
+        hmhvg_1000: 979
+        hmhvg_200: 195
+      gene_files:
+        fixed200: input/cross_external/cross_tissue/ncche-visium__to__hest-PAAD_visium/genes.json#eval
+      genes_eval:
+        fixed200: 200
+    - test_set: external/hest/PRAD_visium
+      tissue: Prostate
+      platform: Visium
+      institutions:
+      - 10x Genomics
+      - KTH/SciLifeLab
+      - MGB
+      oncotree:
+      - PRAD
+      - nan
+      n_samples: 34
+      n_cases: 13
+      samples:
+      - INT25
+      - INT26
+      - INT27
+      - INT28
+      - INT35
+      - MEND139
+      - MEND140
+      - MEND141
+      - MEND142
+      - MEND143
+      - MEND144
+      - MEND145
+      - MEND146
+      - MEND147
+      - MEND148
+      - MEND149
+      - MEND150
+      - MEND151
+      - MEND152
+      - MEND153
+      - MEND154
+      - MEND156
+      - MEND157
+      - MEND158
+      - MEND159
+      - MEND160
+      - MEND161
+      - MEND162
+      - MEND59
+      - MEND60
+      - MEND61
+      - MEND62
+      - TENX40
+      - TENX46
+      genes_measured_in_all: 12816
+      genes_eval_pair:
+        hmhvg_1000: 957
+        hmhvg_200: 183
+      gene_files:
+        fixed200: input/cross_external/cross_tissue/ncche-visium__to__hest-PRAD_visium/genes.json#eval
+      genes_eval:
+        fixed200: 200
+    - test_set: external/wustl/RCC
+      tissue: Kidney
+      platform: Visium
+      institutions:
+      - WUSTL
+      oncotree:
+      - CCRCC
+      n_samples: 10
+      n_cases: 10
+      samples:
+      - HTA12_51_1
+      - HTA12_64_1
+      - HTA12_256_2
+      - HTA12_274_1
+      - HTA12_275_1
+      - HTA12_294_1
+      - HTA12_295_1
+      - HTA12_296_1
+      - HTA12_297_1
+      - HTA12_298_1
+      genes_measured_in_all: 15091
+      genes_eval_pair:
+        hmhvg_1000: 968
+        hmhvg_200: 185
+      gene_files:
+        fixed200: input/cross_external/cross_tissue/ncche-visium__to__wustl-RCC/genes.json#eval
+      genes_eval:
+        fixed200: 200
+    cross_platform_xenium_to_visium: []
+    cross_platform_xenium_to_visium_hd: []
+    cross_platform_visium_to_xenium:
+    - test_set: external/lausanne/LUNG_xenium
+      tissue: Lung
+      platform: Xenium
+      institutions:
+      - Lausanne
+      oncotree:
+      - None
+      n_samples: 6
+      n_cases: 6
+      samples:
+      - GSM9509134
+      - GSM9509135
+      - GSM9509136
+      - GSM9509137
+      - GSM9509138
+      - GSM9509139
+      genes_measured_in_all: 4999
+      genes_eval_pair:
+        hmhvg_1000: 293
+        hmhvg_200: 40
+      gene_files:
+        platform_fixed286: input/cross_external/cross_platform_visium_to_xenium/ncche-visium__to__lausanne-LUNG_xenium/genes.json#eval
+      genes_eval:
+        platform_fixed286: 286
+    cross_platform_visium_to_visium_hd:
+    - test_set: external/hest/LUNG_visium_hd
+      tissue: Lung
+      platform: Visium HD
+      institutions:
+      - 10x Genomics
+      oncotree:
+      - LUAD
+      n_samples: 5
+      n_cases: 5
+      samples:
+      - TENX163
+      - TENX168
+      - TENX169
+      - TENX170
+      - TENX171
+      genes_measured_in_all: 15443
+      genes_eval_pair:
+        hmhvg_1000: 959
+        hmhvg_200: 183
+      gene_files:
+        platform_fixed286: input/cross_external/cross_platform_visium_to_visium_hd/ncche-visium__to__hest-LUNG_visium_hd/genes.json#eval
+      genes_eval:
+        platform_fixed286: 286
+    gene_sets:
+      institution_tissue:
+        fixed200: 200
+      cross_platform:
+        platform_fixed286: 286
+    internal_gene_file: input/ncche/visium/genes.json#eval_fixed200
+  ncche/xenium:
+    institution: NCCHE
+    tissue: Lung
+    platform: Xenium
+    n_train_samples: 13
+    internal_holdout: ncche/xenium_holdout
+    trained_models_available: true
+    panels:
+      total_302: 302
+      hmhvg_200: 200
+    cross_institution:
+    - test_set: external/lausanne/LUNG_xenium
+      tissue: Lung
+      platform: Xenium
+      institutions:
+      - Lausanne
+      oncotree:
+      - None
+      n_samples: 6
+      n_cases: 6
+      samples:
+      - GSM9509134
+      - GSM9509135
+      - GSM9509136
+      - GSM9509137
+      - GSM9509138
+      - GSM9509139
+      genes_measured_in_all: 4999
+      genes_eval_pair:
+        total_302: 188
+        hmhvg_200: 124
+      gene_files:
+        fixed18: input/cross_external/cross_institution/ncche-xenium__to__lausanne-LUNG_xenium/genes.json#eval
+      genes_eval:
+        fixed18: 18
+      warnings:
+      - fewer than 50 genes evaluated
+    cross_tissue:
+    - test_set: external/hest/BRCA_xenium
+      tissue: Breast
+      platform: Xenium
+      institutions:
+      - 10x Genomics
+      oncotree:
+      - IDC
+      - ILC
+      n_samples: 9
+      n_cases: 7
+      samples:
+      - NCBI783
+      - NCBI784
+      - NCBI785
+      - TENX94
+      - TENX95
+      - TENX96
+      - TENX97
+      - TENX98
+      - TENX99
+      genes_measured_in_all: 408
+      genes_eval_pair:
+        total_302: 57
+        hmhvg_200: 41
+      gene_files:
+        fixed18: input/cross_external/cross_tissue/ncche-xenium__to__hest-BRCA_xenium/genes.json#eval
+      genes_eval:
+        fixed18: 18
+      warnings:
+      - fewer than 50 genes evaluated
+    - test_set: external/hest/CRC_xenium
+      tissue: Colorectal
+      platform: Xenium
+      institutions:
+      - 10x Genomics
+      oncotree:
+      - COAD
+      - COADREAD
+      n_samples: 5
+      n_cases: 5
+      samples:
+      - TENX111
+      - TENX139
+      - TENX147
+      - TENX148
+      - TENX149
+      genes_measured_in_all: 160
+      genes_eval_pair:
+        total_302: 38
+        hmhvg_200: 27
+      gene_files:
+        fixed18: input/cross_external/cross_tissue/ncche-xenium__to__hest-CRC_xenium/genes.json#eval
+      genes_eval:
+        fixed18: 18
+      warnings:
+      - fewer than 50 genes evaluated
+    - test_set: external/hest/PAAD_xenium
+      tissue: Pancreas
+      platform: Xenium
+      institutions:
+      - 10x Genomics
+      oncotree:
+      - PAAD
+      n_samples: 3
+      n_cases: 3
+      samples:
+      - TENX116
+      - TENX126
+      - TENX140
+      genes_measured_in_all: 159
+      genes_eval_pair:
+        total_302: 46
+        hmhvg_200: 30
+      gene_files:
+        fixed18: input/cross_external/cross_tissue/ncche-xenium__to__hest-PAAD_xenium/genes.json#eval
+      genes_eval:
+        fixed18: 18
+      warnings:
+      - fewer than 50 genes evaluated
+    cross_platform_xenium_to_visium:
+    - test_set: external/hest/LUNG_visium
+      tissue: Lung
+      platform: Visium
+      institutions:
+      - 10x Genomics
+      oncotree:
+      - LNET
+      - LUSC
+      n_samples: 2
+      n_cases: 2
+      samples:
+      - TENX62
+      - TENX72
+      genes_measured_in_all: 18065
+      genes_eval_pair:
+        total_302: 291
+        hmhvg_200: 193
+      gene_files:
+        platform_fixed286: input/cross_external/cross_platform_xenium_to_visium/ncche-xenium__to__hest-LUNG_visium/genes.json#eval
+      genes_eval:
+        platform_fixed286: 286
+      warnings:
+      - fewer than 3 samples
+    cross_platform_xenium_to_visium_hd:
+    - test_set: external/hest/LUNG_visium_hd
+      tissue: Lung
+      platform: Visium HD
+      institutions:
+      - 10x Genomics
+      oncotree:
+      - LUAD
+      n_samples: 5
+      n_cases: 5
+      samples:
+      - TENX163
+      - TENX168
+      - TENX169
+      - TENX170
+      - TENX171
+      genes_measured_in_all: 15443
+      genes_eval_pair:
+        total_302: 286
+        hmhvg_200: 191
+      gene_files:
+        platform_fixed286: input/cross_external/cross_platform_xenium_to_visium_hd/ncche-xenium__to__hest-LUNG_visium_hd/genes.json#eval
+      genes_eval:
+        platform_fixed286: 286
+    cross_platform_visium_to_xenium: []
+    cross_platform_visium_to_visium_hd: []
+    gene_sets:
+      institution_tissue:
+        fixed18: 18
+      cross_platform:
+        platform_fixed286: 286
+    internal_gene_file: input/ncche/xenium/genes.json#eval_fixed18
+  snu/GBM:
+    institution: SNU
+    tissue: Brain
+    platform: Visium
+    n_train_samples: 21
+    internal_holdout: snu/GBM_holdout
+    trained_models_available: true
+    panels:
+      hmhvg_1000: 1000
+      hmhvg_200: 200
+    cross_institution:
+    - test_set: external/hest/GBM_visium
+      tissue: Brain
+      platform: Visium
+      institutions:
+      - 10x Genomics
+      oncotree:
+      - GBM
+      n_samples: 2
+      n_cases: 2
+      samples:
+      - TENX31
+      - TENX73
+      genes_measured_in_all: 16192
+      genes_eval_pair:
+        hmhvg_1000: 974
+        hmhvg_200: 193
+      excluded:
+        TENX30: targeted / small panel (1198 genes measured)
+      gene_files:
+        fixed200: input/cross_external/cross_institution/snu-GBM__to__hest-GBM_visium/genes.json#eval
+      genes_eval:
+        fixed200: 200
+      warnings:
+      - fewer than 3 samples
+    cross_tissue:
+    - test_set: external/hest/BRCA_visium
+      tissue: Breast
+      platform: Visium
+      institutions:
+      - 10x Genomics
+      oncotree:
+      - IDC
+      - ILC
+      n_samples: 7
+      n_cases: 6
+      samples:
+      - NCBI776
+      - TENX13
+      - TENX14
+      - TENX24
+      - TENX39
+      - TENX53
+      - TENX68
+      genes_measured_in_all: 14366
+      genes_eval_pair:
+        hmhvg_1000: 947
+        hmhvg_200: 188
+      gene_files:
+        fixed200: input/cross_external/cross_tissue/snu-GBM__to__hest-BRCA_visium/genes.json#eval
+      genes_eval:
+        fixed200: 200
+    - test_set: external/hest/CRC_visium
+      tissue: Colorectal
+      platform: Visium
+      institutions:
+      - 10x Genomics
+      - Roche (Valdeolivas 2023)
+      oncotree:
+      - COAD
+      - COADREAD
+      - READ
+      n_samples: 20
+      n_cases: 14
+      samples:
+      - TENX152
+      - TENX29
+      - TENX49
+      - TENX70
+      - TENX89
+      - TENX90
+      - TENX91
+      - TENX92
+      - ZEN36
+      - ZEN38
+      - ZEN39
+      - ZEN40
+      - ZEN42
+      - ZEN43
+      - ZEN44
+      - ZEN45
+      - ZEN46
+      - ZEN47
+      - ZEN48
+      - ZEN49
+      genes_measured_in_all: 12753
+      genes_eval_pair:
+        hmhvg_1000: 913
+        hmhvg_200: 179
+      excluded:
+        TENX28: targeted / small panel (1134 genes measured)
+      gene_files:
+        fixed200: input/cross_external/cross_tissue/snu-GBM__to__hest-CRC_visium/genes.json#eval
+      genes_eval:
+        fixed200: 200
+    - test_set: external/hest/LUNG_visium
+      tissue: Lung
+      platform: Visium
+      institutions:
+      - 10x Genomics
+      oncotree:
+      - LNET
+      - LUSC
+      n_samples: 2
+      n_cases: 2
+      samples:
+      - TENX62
+      - TENX72
+      genes_measured_in_all: 18065
+      genes_eval_pair:
+        hmhvg_1000: 974
+        hmhvg_200: 193
+      gene_files:
+        fixed200: input/cross_external/cross_tissue/snu-GBM__to__hest-LUNG_visium/genes.json#eval
+      genes_eval:
+        fixed200: 200
+      warnings:
+      - fewer than 3 samples
+    - test_set: external/hest/PAAD_visium
+      tissue: Pancreas
+      platform: Visium
+      institutions:
+      - Nat Commun 2023 PDAC Schwann (s41467-023-40314-w)
+      oncotree:
+      - PAAD
+      n_samples: 4
+      n_cases: 4
+      samples:
+      - NCBI569
+      - NCBI570
+      - NCBI571
+      - NCBI572
+      genes_measured_in_all: 16592
+      genes_eval_pair:
+        hmhvg_1000: 975
+        hmhvg_200: 195
+      gene_files:
+        fixed200: input/cross_external/cross_tissue/snu-GBM__to__hest-PAAD_visium/genes.json#eval
+      genes_eval:
+        fixed200: 200
+    - test_set: external/hest/PRAD_visium
+      tissue: Prostate
+      platform: Visium
+      institutions:
+      - 10x Genomics
+      - KTH/SciLifeLab
+      - MGB
+      oncotree:
+      - PRAD
+      - nan
+      n_samples: 34
+      n_cases: 13
+      samples:
+      - INT25
+      - INT26
+      - INT27
+      - INT28
+      - INT35
+      - MEND139
+      - MEND140
+      - MEND141
+      - MEND142
+      - MEND143
+      - MEND144
+      - MEND145
+      - MEND146
+      - MEND147
+      - MEND148
+      - MEND149
+      - MEND150
+      - MEND151
+      - MEND152
+      - MEND153
+      - MEND154
+      - MEND156
+      - MEND157
+      - MEND158
+      - MEND159
+      - MEND160
+      - MEND161
+      - MEND162
+      - MEND59
+      - MEND60
+      - MEND61
+      - MEND62
+      - TENX40
+      - TENX46
+      genes_measured_in_all: 12816
+      genes_eval_pair:
+        hmhvg_1000: 935
+        hmhvg_200: 188
+      gene_files:
+        fixed200: input/cross_external/cross_tissue/snu-GBM__to__hest-PRAD_visium/genes.json#eval
+      genes_eval:
+        fixed200: 200
+    - test_set: external/wustl/RCC
+      tissue: Kidney
+      platform: Visium
+      institutions:
+      - WUSTL
+      oncotree:
+      - CCRCC
+      n_samples: 10
+      n_cases: 10
+      samples:
+      - HTA12_51_1
+      - HTA12_64_1
+      - HTA12_256_2
+      - HTA12_274_1
+      - HTA12_275_1
+      - HTA12_294_1
+      - HTA12_295_1
+      - HTA12_296_1
+      - HTA12_297_1
+      - HTA12_298_1
+      genes_measured_in_all: 15091
+      genes_eval_pair:
+        hmhvg_1000: 967
+        hmhvg_200: 194
+      gene_files:
+        fixed200: input/cross_external/cross_tissue/snu-GBM__to__wustl-RCC/genes.json#eval
+      genes_eval:
+        fixed200: 200
+    cross_platform_xenium_to_visium: []
+    cross_platform_xenium_to_visium_hd: []
+    cross_platform_visium_to_xenium: []
+    cross_platform_visium_to_visium_hd: []
+    gene_sets:
+      institution_tissue:
+        fixed200: 200
+    internal_gene_file: input/snu/GBM/genes.json#eval_fixed200
+  wustl/BRCA:
+    institution: WUSTL
+    tissue: Breast
+    platform: Visium
+    n_train_samples: 39
+    internal_holdout: wustl/BRCA_holdout
+    trained_models_available: true
+    panels:
+      hmhvg_1000: 1000
+      hmhvg_200: 200
+    cross_institution:
+    - test_set: external/hest/BRCA_visium
+      tissue: Breast
+      platform: Visium
+      institutions:
+      - 10x Genomics
+      oncotree:
+      - IDC
+      - ILC
+      n_samples: 7
+      n_cases: 6
+      samples:
+      - NCBI776
+      - TENX13
+      - TENX14
+      - TENX24
+      - TENX39
+      - TENX53
+      - TENX68
+      genes_measured_in_all: 14366
+      genes_eval_pair:
+        hmhvg_1000: 820
+        hmhvg_200: 148
+      gene_files:
+        fixed200: input/cross_external/cross_institution/wustl-BRCA__to__hest-BRCA_visium/genes.json#eval
+      genes_eval:
+        fixed200: 200
+    cross_tissue:
+    - test_set: external/hest/CRC_visium
+      tissue: Colorectal
+      platform: Visium
+      institutions:
+      - 10x Genomics
+      - Roche (Valdeolivas 2023)
+      oncotree:
+      - COAD
+      - COADREAD
+      - READ
+      n_samples: 20
+      n_cases: 14
+      samples:
+      - TENX152
+      - TENX29
+      - TENX49
+      - TENX70
+      - TENX89
+      - TENX90
+      - TENX91
+      - TENX92
+      - ZEN36
+      - ZEN38
+      - ZEN39
+      - ZEN40
+      - ZEN42
+      - ZEN43
+      - ZEN44
+      - ZEN45
+      - ZEN46
+      - ZEN47
+      - ZEN48
+      - ZEN49
+      genes_measured_in_all: 12753
+      genes_eval_pair:
+        hmhvg_1000: 818
+        hmhvg_200: 145
+      excluded:
+        TENX28: targeted / small panel (1134 genes measured)
+      gene_files:
+        fixed200: input/cross_external/cross_tissue/wustl-BRCA__to__hest-CRC_visium/genes.json#eval
+      genes_eval:
+        fixed200: 200
+    - test_set: external/hest/GBM_visium
+      tissue: Brain
+      platform: Visium
+      institutions:
+      - 10x Genomics
+      oncotree:
+      - GBM
+      n_samples: 2
+      n_cases: 2
+      samples:
+      - TENX31
+      - TENX73
+      genes_measured_in_all: 16192
+      genes_eval_pair:
+        hmhvg_1000: 906
+        hmhvg_200: 165
+      excluded:
+        TENX30: targeted / small panel (1198 genes measured)
+      gene_files:
+        fixed200: input/cross_external/cross_tissue/wustl-BRCA__to__hest-GBM_visium/genes.json#eval
+      genes_eval:
+        fixed200: 200
+      warnings:
+      - fewer than 3 samples
+    - test_set: external/hest/LUNG_visium
+      tissue: Lung
+      platform: Visium
+      institutions:
+      - 10x Genomics
+      oncotree:
+      - LNET
+      - LUSC
+      n_samples: 2
+      n_cases: 2
+      samples:
+      - TENX62
+      - TENX72
+      genes_measured_in_all: 18065
+      genes_eval_pair:
+        hmhvg_1000: 916
+        hmhvg_200: 167
+      gene_files:
+        fixed200: input/cross_external/cross_tissue/wustl-BRCA__to__hest-LUNG_visium/genes.json#eval
+      genes_eval:
+        fixed200: 200
+      warnings:
+      - fewer than 3 samples
+    - test_set: external/hest/PAAD_visium
+      tissue: Pancreas
+      platform: Visium
+      institutions:
+      - Nat Commun 2023 PDAC Schwann (s41467-023-40314-w)
+      oncotree:
+      - PAAD
+      n_samples: 4
+      n_cases: 4
+      samples:
+      - NCBI569
+      - NCBI570
+      - NCBI571
+      - NCBI572
+      genes_measured_in_all: 16592
+      genes_eval_pair:
+        hmhvg_1000: 974
+        hmhvg_200: 190
+      gene_files:
+        fixed200: input/cross_external/cross_tissue/wustl-BRCA__to__hest-PAAD_visium/genes.json#eval
+      genes_eval:
+        fixed200: 200
+    - test_set: external/hest/PRAD_visium
+      tissue: Prostate
+      platform: Visium
+      institutions:
+      - 10x Genomics
+      - KTH/SciLifeLab
+      - MGB
+      oncotree:
+      - PRAD
+      - nan
+      n_samples: 34
+      n_cases: 13
+      samples:
+      - INT25
+      - INT26
+      - INT27
+      - INT28
+      - INT35
+      - MEND139
+      - MEND140
+      - MEND141
+      - MEND142
+      - MEND143
+      - MEND144
+      - MEND145
+      - MEND146
+      - MEND147
+      - MEND148
+      - MEND149
+      - MEND150
+      - MEND151
+      - MEND152
+      - MEND153
+      - MEND154
+      - MEND156
+      - MEND157
+      - MEND158
+      - MEND159
+      - MEND160
+      - MEND161
+      - MEND162
+      - MEND59
+      - MEND60
+      - MEND61
+      - MEND62
+      - TENX40
+      - TENX46
+      genes_measured_in_all: 12816
+      genes_eval_pair:
+        hmhvg_1000: 839
+        hmhvg_200: 152
+      gene_files:
+        fixed200: input/cross_external/cross_tissue/wustl-BRCA__to__hest-PRAD_visium/genes.json#eval
+      genes_eval:
+        fixed200: 200
+    cross_tissue_same_institution:
+    - test_set: external/wustl/RCC
+      tissue: Kidney
+      platform: Visium
+      institutions:
+      - WUSTL
+      oncotree:
+      - CCRCC
+      n_samples: 10
+      n_cases: 10
+      samples:
+      - HTA12_51_1
+      - HTA12_64_1
+      - HTA12_256_2
+      - HTA12_274_1
+      - HTA12_275_1
+      - HTA12_294_1
+      - HTA12_295_1
+      - HTA12_296_1
+      - HTA12_297_1
+      - HTA12_298_1
+      gene_files:
+        fixed200: input/cross_external/cross_tissue_same_institution/wustl-BRCA__to__wustl-RCC/genes.json#eval
+      genes_eval:
+        fixed200: 195
+      note: same institution as the training set (excluded from cross_tissue by the institution rule); gene list = the training
+        set cross_tissue list restricted to genes measured in every sample
+    cross_platform_xenium_to_visium: []
+    cross_platform_xenium_to_visium_hd: []
+    cross_platform_visium_to_xenium:
+    - test_set: external/hest/BRCA_xenium
+      tissue: Breast
+      platform: Xenium
+      institutions:
+      - 10x Genomics
+      oncotree:
+      - IDC
+      - ILC
+      n_samples: 9
+      n_cases: 7
+      samples:
+      - NCBI783
+      - NCBI784
+      - NCBI785
+      - TENX94
+      - TENX95
+      - TENX96
+      - TENX97
+      - TENX98
+      - TENX99
+      genes_measured_in_all: 408
+      genes_eval_pair:
+        hmhvg_1000: 44
+        hmhvg_200: 10
+      gene_files:
+        platform_fixed44: input/cross_external/cross_platform_visium_to_xenium/wustl-BRCA__to__hest-BRCA_xenium/genes.json#eval
+      genes_eval:
+        platform_fixed44: 44
+      warnings:
+      - fewer than 50 genes evaluated
+    cross_platform_visium_to_visium_hd:
+    - test_set: external/hest/BRCA_visium_hd
+      tissue: Breast
+      platform: Visium HD
+      institutions:
+      - 10x Genomics
+      oncotree:
+      - IDC
+      n_samples: 3
+      n_cases: 3
+      samples:
+      - TENX161
+      - TENX162
+      - TENX180
+      genes_measured_in_all: 15554
+      genes_eval_pair:
+        hmhvg_1000: 907
+        hmhvg_200: 166
+      gene_files:
+        platform_fixed44: input/cross_external/cross_platform_visium_to_visium_hd/wustl-BRCA__to__hest-BRCA_visium_hd/genes.json#eval
+      genes_eval:
+        platform_fixed44: 44
+      warnings:
+      - fewer than 50 genes evaluated
+    no_usable_samples:
+    - condition: cross_tissue
+      test_set: external/wustl/RCC
+      excluded:
+        HTA12_51_1: same institution
+        HTA12_64_1: same institution
+        HTA12_256_2: same institution
+        HTA12_274_1: same institution
+        HTA12_275_1: same institution
+        HTA12_294_1: same institution
+        HTA12_295_1: same institution
+        HTA12_296_1: same institution
+        HTA12_297_1: same institution
+        HTA12_298_1: same institution
+    gene_sets:
+      institution_tissue:
+        fixed200: 200
+      cross_platform:
+        platform_fixed44: 44
+    internal_gene_file: input/wustl/BRCA/genes.json#eval_fixed200
+  wustl/PDAC:
+    institution: WUSTL
+    tissue: Pancreas
+    platform: Visium
+    n_train_samples: 12
+    internal_holdout: wustl/PDAC_holdout
+    trained_models_available: true
+    panels:
+      hmhvg_1000: 1000
+      hmhvg_200: 200
+    cross_institution:
+    - test_set: external/hest/PAAD_visium
+      tissue: Pancreas
+      platform: Visium
+      institutions:
+      - Nat Commun 2023 PDAC Schwann (s41467-023-40314-w)
+      oncotree:
+      - PAAD
+      n_samples: 4
+      n_cases: 4
+      samples:
+      - NCBI569
+      - NCBI570
+      - NCBI571
+      - NCBI572
+      genes_measured_in_all: 16592
+      genes_eval_pair:
+        hmhvg_1000: 979
+        hmhvg_200: 191
+      gene_files:
+        fixed200: input/cross_external/cross_institution/wustl-PDAC__to__hest-PAAD_visium/genes.json#eval
+      genes_eval:
+        fixed200: 200
+    cross_tissue:
+    - test_set: external/hest/BRCA_visium
+      tissue: Breast
+      platform: Visium
+      institutions:
+      - 10x Genomics
+      oncotree:
+      - IDC
+      - ILC
+      n_samples: 7
+      n_cases: 6
+      samples:
+      - NCBI776
+      - TENX13
+      - TENX14
+      - TENX24
+      - TENX39
+      - TENX53
+      - TENX68
+      genes_measured_in_all: 14366
+      genes_eval_pair:
+        hmhvg_1000: 866
+        hmhvg_200: 150
+      gene_files:
+        fixed200: input/cross_external/cross_tissue/wustl-PDAC__to__hest-BRCA_visium/genes.json#eval
+      genes_eval:
+        fixed200: 200
+    - test_set: external/hest/CRC_visium
+      tissue: Colorectal
+      platform: Visium
+      institutions:
+      - 10x Genomics
+      - Roche (Valdeolivas 2023)
+      oncotree:
+      - COAD
+      - COADREAD
+      - READ
+      n_samples: 20
+      n_cases: 14
+      samples:
+      - TENX152
+      - TENX29
+      - TENX49
+      - TENX70
+      - TENX89
+      - TENX90
+      - TENX91
+      - TENX92
+      - ZEN36
+      - ZEN38
+      - ZEN39
+      - ZEN40
+      - ZEN42
+      - ZEN43
+      - ZEN44
+      - ZEN45
+      - ZEN46
+      - ZEN47
+      - ZEN48
+      - ZEN49
+      genes_measured_in_all: 12753
+      genes_eval_pair:
+        hmhvg_1000: 858
+        hmhvg_200: 147
+      excluded:
+        TENX28: targeted / small panel (1134 genes measured)
+      gene_files:
+        fixed200: input/cross_external/cross_tissue/wustl-PDAC__to__hest-CRC_visium/genes.json#eval
+      genes_eval:
+        fixed200: 200
+    - test_set: external/hest/GBM_visium
+      tissue: Brain
+      platform: Visium
+      institutions:
+      - 10x Genomics
+      oncotree:
+      - GBM
+      n_samples: 2
+      n_cases: 2
+      samples:
+      - TENX31
+      - TENX73
+      genes_measured_in_all: 16192
+      genes_eval_pair:
+        hmhvg_1000: 914
+        hmhvg_200: 165
+      excluded:
+        TENX30: targeted / small panel (1198 genes measured)
+      gene_files:
+        fixed200: input/cross_external/cross_tissue/wustl-PDAC__to__hest-GBM_visium/genes.json#eval
+      genes_eval:
+        fixed200: 200
+      warnings:
+      - fewer than 3 samples
+    - test_set: external/hest/LUNG_visium
+      tissue: Lung
+      platform: Visium
+      institutions:
+      - 10x Genomics
+      oncotree:
+      - LNET
+      - LUSC
+      n_samples: 2
+      n_cases: 2
+      samples:
+      - TENX62
+      - TENX72
+      genes_measured_in_all: 18065
+      genes_eval_pair:
+        hmhvg_1000: 944
+        hmhvg_200: 181
+      gene_files:
+        fixed200: input/cross_external/cross_tissue/wustl-PDAC__to__hest-LUNG_visium/genes.json#eval
+      genes_eval:
+        fixed200: 200
+      warnings:
+      - fewer than 3 samples
+    - test_set: external/hest/PRAD_visium
+      tissue: Prostate
+      platform: Visium
+      institutions:
+      - 10x Genomics
+      - KTH/SciLifeLab
+      - MGB
+      oncotree:
+      - PRAD
+      - nan
+      n_samples: 34
+      n_cases: 13
+      samples:
+      - INT25
+      - INT26
+      - INT27
+      - INT28
+      - INT35
+      - MEND139
+      - MEND140
+      - MEND141
+      - MEND142
+      - MEND143
+      - MEND144
+      - MEND145
+      - MEND146
+      - MEND147
+      - MEND148
+      - MEND149
+      - MEND150
+      - MEND151
+      - MEND152
+      - MEND153
+      - MEND154
+      - MEND156
+      - MEND157
+      - MEND158
+      - MEND159
+      - MEND160
+      - MEND161
+      - MEND162
+      - MEND59
+      - MEND60
+      - MEND61
+      - MEND62
+      - TENX40
+      - TENX46
+      genes_measured_in_all: 12816
+      genes_eval_pair:
+        hmhvg_1000: 856
+        hmhvg_200: 150
+      gene_files:
+        fixed200: input/cross_external/cross_tissue/wustl-PDAC__to__hest-PRAD_visium/genes.json#eval
+      genes_eval:
+        fixed200: 200
+    cross_tissue_same_institution:
+    - test_set: external/wustl/RCC
+      tissue: Kidney
+      platform: Visium
+      institutions:
+      - WUSTL
+      oncotree:
+      - CCRCC
+      n_samples: 10
+      n_cases: 10
+      samples:
+      - HTA12_51_1
+      - HTA12_64_1
+      - HTA12_256_2
+      - HTA12_274_1
+      - HTA12_275_1
+      - HTA12_294_1
+      - HTA12_295_1
+      - HTA12_296_1
+      - HTA12_297_1
+      - HTA12_298_1
+      gene_files:
+        fixed200: input/cross_external/cross_tissue_same_institution/wustl-PDAC__to__wustl-RCC/genes.json#eval
+      genes_eval:
+        fixed200: 195
+      note: same institution as the training set (excluded from cross_tissue by the institution rule); gene list = the training
+        set cross_tissue list restricted to genes measured in every sample
+    cross_platform_xenium_to_visium: []
+    cross_platform_xenium_to_visium_hd: []
+    cross_platform_visium_to_xenium: []
+    cross_platform_visium_to_visium_hd: []
+    excluded_pairs:
+    - test_set: external/hest/PAAD_xenium
+      reason: only 2 hmhvg_200 genes measured
+    no_usable_samples:
+    - condition: cross_tissue
+      test_set: external/wustl/RCC
+      excluded:
+        HTA12_51_1: same institution
+        HTA12_64_1: same institution
+        HTA12_256_2: same institution
+        HTA12_274_1: same institution
+        HTA12_275_1: same institution
+        HTA12_294_1: same institution
+        HTA12_295_1: same institution
+        HTA12_296_1: same institution
+        HTA12_297_1: same institution
+        HTA12_298_1: same institution
+    gene_sets:
+      institution_tissue:
+        fixed200: 200
+    internal_gene_file: input/wustl/PDAC/genes.json#eval_fixed200

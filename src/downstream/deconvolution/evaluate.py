@@ -23,6 +23,28 @@ from .run import _load_or_train_signatures
 from .spatial import run_cell2location_sample
 
 
+_C2L_KEYS = ("n_cells_per_location", "detection_alpha", "spatial_epochs", "spatial_batch_size", "spatial_posterior_samples",
+             "reference_path", "labels_key", "batch_key", "max_cells_per_label", "reference_epochs")
+
+
+def deconv_gt_cache_dir(data_dir, genes, params) -> str:
+    """GT deconvolution does not depend on the model/fold: share one cache per (data, gene panel, cell2location params)."""
+    import hashlib
+    import json as _json
+
+    key = _json.dumps([os.path.abspath(str(data_dir)), list(genes), [[k, params.get(k)] for k in _C2L_KEYS]], default=str)
+    return os.path.join("output", "downstream_cache", "deconvolution_gt", hashlib.md5(key.encode()).hexdigest()[:12])
+
+
+def deconv_samples(cfg, params):
+    """`use_all_pred_samples: true` = every sample with a prediction file (holdout sets: all samples are test for every fold's model)."""
+    if params.get("use_all_pred_samples"):
+        from glob import glob
+
+        return sorted(os.path.splitext(os.path.basename(p))[0] for p in glob(os.path.join(cfg.DATA.pred_path_fold, "*.h5ad")))
+    return list_fold_samples(cfg)
+
+
 def evaluate_deconvolution(cfg) -> Dict[str, Any]:
     cpm = cfg.DATA.get("cpm", False)
     signatures, accelerator = _load_or_train_signatures(cfg)
@@ -30,7 +52,19 @@ def evaluate_deconvolution(cfg) -> Dict[str, Any]:
 
     out_dir = downstream_output_dir(cfg, "deconvolution")
     gt_cache_dir = os.path.join(out_dir, "eval", "gt")
+    if params.get("share_gt_cache"):
+        from downstream.common import load_gene_panel
+
+        gt_cache_dir = deconv_gt_cache_dir(cfg.DATA.data_dir, load_gene_panel(cfg.MODEL.gene_path), params)
     os.makedirs(gt_cache_dir, exist_ok=True)
+
+    if params.get("gt_seed_dir") and params.get("share_gt_cache"):
+        import shutil
+
+        os.makedirs(gt_cache_dir, exist_ok=True)
+        for fn in os.listdir(params["gt_seed_dir"]):
+            if fn.endswith(".csv") and not os.path.isfile(os.path.join(gt_cache_dir, fn)):
+                shutil.copy(os.path.join(params["gt_seed_dir"], fn), os.path.join(gt_cache_dir, fn))
 
     def _run(adata, sample_id):
         _, abundance = run_cell2location_sample(
@@ -45,7 +79,7 @@ def evaluate_deconvolution(cfg) -> Dict[str, Any]:
         return abundance
 
     rows: List[Dict[str, Any]] = []
-    for sample_id in list_fold_samples(cfg):
+    for sample_id in deconv_samples(cfg, params):
         pred_csv = os.path.join(out_dir, f"{sample_id}.q05_cell_abundance_w_sf.csv")
         if os.path.isfile(pred_csv):
             pred_abundance = pd.read_csv(pred_csv, index_col=0)

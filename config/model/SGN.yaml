@@ -7,7 +7,7 @@ MODEL:
   feature_dim: 1536
   name_dim: 4096
   gene2name_path: src/model/SGN/preprocess
-  name_feature_path: /home/shared/chungym/hier_st/input/name_feature/Intel/neural-chat-7b-v3-1
+  name_feature_path: local/stp_bench_data/name_feature/Intel/neural-chat-7b-v3-1
   extra_preprocess:
   - script: name_to_feature.py
   - script: build_exemplar.py

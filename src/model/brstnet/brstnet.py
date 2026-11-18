@@ -1,5 +1,6 @@
 from glob import glob
 import json
+from genes_io import has_genes, read_genes
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -36,20 +37,11 @@ class BrSTNet(nn.Module):
     ):
         super().__init__()
         
-        if ref_data_dir is None:
-            total_gene_paths = glob(f"{data_dir}/total_*.json")
-        else:
-            total_gene_paths = glob(f"{ref_data_dir}/total_*.json")
+        if ref_data_dir is not None:
             data_dir = ref_data_dir
-        
-        if len(total_gene_paths) == 0:
-            raise ValueError(f"No total genes file found in {data_dir}.")
-        elif len(total_gene_paths) > 1:
-            raise ValueError(f"Multiple total genes files found in {data_dir}: {total_gene_paths}")
-            
-        total_gene_path = total_gene_paths[0]
-        with open(total_gene_path, 'r') as f:
-            total_genes = json.load(f)['genes']
+        if not has_genes(data_dir, "total"):
+            raise ValueError(f"No total genes set found in {data_dir}.")
+        total_genes = read_genes(data_dir, "total")
         
         aux_outputs = len(total_genes) - num_genes
         

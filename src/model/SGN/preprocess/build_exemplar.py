@@ -1,4 +1,10 @@
 import os
+import sys as _sys
+_p = os.path.abspath(__file__)
+while os.path.basename(_p) != "src" and _p != os.path.dirname(_p):
+    _p = os.path.dirname(_p)
+_sys.path.insert(0, _p)
+from ids_io import read_ids, phase_label
 from tqdm import tqdm
 
 import argparse
@@ -11,11 +17,11 @@ import torch
 
 def _read_ids(meta_dir, phase, fold):
     ids_path = os.path.join(meta_dir, "ids.csv")
-    ids = pd.read_csv(ids_path)
+    ids = read_ids(meta_dir)
     fold_col = f"fold_{fold}"
     if fold_col not in ids.columns:
         raise FileNotFoundError(f"{fold_col} is missing from {ids_path}")
-    return ids.loc[ids[fold_col].astype(str).str.lower() == phase].reset_index(drop=True)
+    return ids.loc[ids[fold_col].astype(str).str.lower() == phase_label(ids, phase)].reset_index(drop=True)
 
 
 def _num_folds(meta_dir):
@@ -70,7 +76,7 @@ def main(
         if external_dir is None:
             test_dataset = _read_ids(meta_dir, "test", fold)
         else:
-            test_dataset = pd.read_csv(os.path.join(external_meta_dir, "ids.csv"))
+            test_dataset = read_ids(external_meta_dir)
 
         train_names = train_dataset["sample_id"].tolist()
         train_embs = []

@@ -1,6 +1,13 @@
 
 import sys
 import os
+import sys as _sys
+_p = os.path.abspath(__file__)
+while os.path.basename(_p) != "src" and _p != os.path.dirname(_p):
+    _p = os.path.dirname(_p)
+_sys.path.insert(0, _p)
+from ids_io import read_ids, phase_label
+from genes_io import has_genes, read_genes, read_eval_genes
 from tqdm import tqdm
 os.environ['USE_PYGEOS'] = '0' # To supress a warning from geopandas
 import squidpy as sq
@@ -41,11 +48,11 @@ def _read_ids(meta_dir, phase, fold):
         return pd.read_csv(split_path)["sample_id"]
 
     ids_path = os.path.join(meta_dir, "ids.csv")
-    ids = pd.read_csv(ids_path)
+    ids = read_ids(meta_dir)
     fold_col = f"fold_{fold}"
     if fold_col not in ids.columns:
         raise FileNotFoundError(f"{split_path} not found and {fold_col} is missing from {ids_path}")
-    return ids.loc[ids[fold_col].astype(str).str.lower() == phase, "sample_id"]
+    return ids.loc[ids[fold_col].astype(str).str.lower() == phase_label(ids, phase), "sample_id"]
 
 
 def _num_folds(meta_dir):
@@ -285,7 +292,18 @@ class SepalPreprocess:
         counts = adata.X.toarray() if sparse.issparse(adata.X) else adata.X
         counts = torch.from_numpy(counts).type(torch.float32)                                   # Get global counts
         # patches = torch.from_numpy(adata.obsm[f'patches_scale_{self.patch_scale}'])                                 # Get global patches
-        pos = torch.from_numpy(adata.obs[['array_row', 'array_col']].values.astype('int64'))                                        # Get global positions
+        if not {'array_row', 'array_col'}.issubset(adata.obs.columns):
+            # some external samples (e.g. hest xenium TENX97/98/111) ship without the grid index. For xenium it is the spot
+            # coordinates divided by roughly one spot spacing, so rebuild it from obsm['spatial'] with the spacing taken
+            # from the median nearest-neighbour distance (spatial x -> array_col, spatial y -> array_row).
+            from scipy.spatial import cKDTree
+            xy = np.asarray(adata.obsm['spatial'], dtype='float64')
+            unit = float(np.median(cKDTree(xy).query(xy, k=2)[0][:, 1]))
+            grid = np.rint((xy - xy.min(axis=0)) / unit).astype('int64')
+            print(f"[sepal] no array_row/array_col in obs; derived from obsm['spatial'] (spacing {unit:.1f}px)")
+            pos = torch.from_numpy(np.stack([grid[:, 1], grid[:, 0]], axis=1))
+        else:
+            pos = torch.from_numpy(adata.obs[['array_row', 'array_col']].values.astype('int64'))                                        # Get global positions
 
         # If embeddings and predictions are present in obsm, get them
         embeddings = torch.from_numpy(adata.obsm['embeddings']).type(torch.float32) if 'embeddings' in adata.obsm.keys() else None
@@ -427,13 +445,8 @@ class SepalPreprocess:
             # output's fixed gene_output_indices slice.
             genes = list(genes_override)
         else:
-            if self.ref_meta_dir is not None:
-                gene_path = f"{self.ref_meta_dir}/{gene_type}_{num_genes}genes.json"
-            else:
-                gene_path = f"{self.dataset_path}/{gene_type}_{num_genes}genes.json"
-
-            with open(gene_path, 'r') as f:
-                genes = json.load(f)['genes']
+            gene_dir = self.ref_meta_dir if self.ref_meta_dir is not None else self.dataset_path
+            genes = read_genes(gene_dir, gene_type, num_genes)
 
         adata = self.load_st(name=slide_name, genes=genes, normalize=True, cpm=cpm, smooth=smooth)
         # pred_path = glob(f"{self.pred_path}/fold*")[0]
@@ -491,18 +504,15 @@ def _external_genes_override(meta_dir, dataset_path, external_meta_dir, external
     every external sample (no restriction needed) or the check can't be
     performed.
     """
-    gene_path = f"{meta_dir}/{gene_type}_{num_genes}genes.json"
-    if not os.path.isfile(gene_path):
-        gene_path = f"{dataset_path}/{gene_type}_{num_genes}genes.json"
-    if not os.path.isfile(gene_path):
+    gene_dir = meta_dir if has_genes(meta_dir, gene_type, num_genes) else dataset_path
+    if not has_genes(gene_dir, gene_type, num_genes):
         return None
-    with open(gene_path) as f:
-        train_genes = json.load(f)['genes']
+    train_genes = read_genes(gene_dir, gene_type, num_genes)
 
     ids_path = os.path.join(external_meta_dir, "ids.csv")
     if not os.path.isfile(ids_path):
         return None
-    sample_ids = pd.read_csv(ids_path)["sample_id"].dropna().astype(str).tolist()
+    sample_ids = read_ids(external_meta_dir)["sample_id"].dropna().astype(str).tolist()
 
     measured = None
     try:
@@ -520,6 +530,11 @@ def _external_genes_override(meta_dir, dataset_path, external_meta_dir, external
         return None
 
     overlap = [g for g in train_genes if g in measured]
+    # explicit evaluation gene list shipped with the external dataset (cross_external): targets must equal the sliced predictions
+    requested = read_eval_genes(external_meta_dir)
+    if requested is not None:
+        requested = set(requested)
+        overlap = [g for g in overlap if g in requested]
     if len(overlap) == len(train_genes):
         return None
     return overlap
@@ -604,7 +619,7 @@ def main():
                     else:
                         print(f"Processing external phase {phase}...")
                         split_path = f"{external_meta_dir}/ids.csv"
-                        split = pd.read_csv(split_path)["sample_id"]
+                        split = read_ids(external_meta_dir)["sample_id"]
 
                         # Namespace by meta_dir, matching SepalDataset's own
                         # `ref_data` derivation (ref_data_dir.split('/')[-2:])

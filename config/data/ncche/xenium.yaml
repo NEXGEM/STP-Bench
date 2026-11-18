@@ -16,12 +16,12 @@ TRAINING:
     factor: 0.1
   every_n_epochs: 1
 DATA:
-  data_dir: /path/to/stp_bench_data
+  data_dir: local/stp_bench_data
   meta_dir: input/ncche/xenium
   output_dir: output/pred
-  gene_type: hmhvg
-  num_genes: 200
-  num_outputs: 200
+  gene_type: total
+  num_genes: 302
+  num_outputs: 302
   normalize: true
   cpm: false
   smooth: false
@@ -43,6 +43,6 @@ preprocess:
   mode: stpbench
   platform: xenium
   meta_dir: input/ncche/xenium
-  input_dir: /path/to/stp_bench_data
-  output_dir: /path/to/stp_bench_data
+  input_dir: local/stp_bench_data
+  output_dir: local/stp_bench_data
   overwrite: false

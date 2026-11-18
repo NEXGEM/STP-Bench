@@ -66,4 +66,7 @@ def read_st(st_path):
     """Read an ST h5ad and pair its rows with the sample's patches (see module docstring)."""
     import scanpy as sc
 
-    return align_to_patches(sc.read_h5ad(st_path), patch_path_for_st(st_path))
+    a = sc.read_h5ad(st_path)
+    if not a.var_names.is_unique:  # a few duplicated gene names (HEST Visium HD samples): keep the first so name-based indexing works
+        a = a[:, ~a.var_names.duplicated()].copy()
+    return align_to_patches(a, patch_path_for_st(st_path))

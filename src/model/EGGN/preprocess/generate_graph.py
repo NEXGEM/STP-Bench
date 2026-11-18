@@ -2,6 +2,13 @@ from tqdm import tqdm
 import numpy as np
 import torch
 import os
+import sys as _sys
+_p = os.path.abspath(__file__)
+while os.path.basename(_p) != "src" and _p != os.path.dirname(_p):
+    _p = os.path.dirname(_p)
+_sys.path.insert(0, _p)
+from ids_io import read_ids, phase_label
+from genes_io import has_genes, read_genes, read_eval_genes
 from collections import namedtuple
 import torch_geometric
 import argparse
@@ -27,23 +34,18 @@ def _external_genes_override(meta_dir, asset_dir, external_meta_dir, external_as
     external data (no restriction needed) or the check can't be performed.
     """
     import json
-    train_gene_path = None
+    train_genes = None
     for candidate_dir in dict.fromkeys([meta_dir, asset_dir]):
-        if not candidate_dir:
-            continue
-        path = os.path.join(candidate_dir, f"{gene_type}_{num_genes}genes.json")
-        if os.path.isfile(path):
-            train_gene_path = path
+        if candidate_dir and has_genes(candidate_dir, gene_type, num_genes):
+            train_genes = read_genes(candidate_dir, gene_type, num_genes)
             break
-    if train_gene_path is None:
+    if train_genes is None:
         return None
-    with open(train_gene_path) as f:
-        train_genes = json.load(f)['genes']
 
     ids_path = os.path.join(external_meta_dir, "ids.csv")
     if not os.path.isfile(ids_path):
         return None
-    sample_ids = pd.read_csv(ids_path)["sample_id"].dropna().astype(str).tolist()
+    sample_ids = read_ids(external_meta_dir)["sample_id"].dropna().astype(str).tolist()
 
     from dataset.path_utils import st_dir as resolve_st_dir
     st_root = resolve_st_dir(external_asset_dir)
@@ -63,6 +65,11 @@ def _external_genes_override(meta_dir, asset_dir, external_meta_dir, external_as
         return None
 
     overlap = [g for g in train_genes if g in measured]
+    # explicit evaluation gene list shipped with the external dataset (cross_external): targets must equal the sliced predictions
+    requested = read_eval_genes(external_meta_dir)
+    if requested is not None:
+        requested = set(requested)
+        overlap = [g for g in overlap if g in requested]
     if len(overlap) == len(train_genes):
         return None
     return overlap
@@ -202,6 +209,9 @@ def main(
     external_asset_dir = external_asset_dir or external_dir
     external_meta_dir = external_meta_dir or external_dir
     num_fold = _num_folds(meta_dir)
+    # cross_external datasets ship their own evaluation gene list: cached graphs hold labels for another list -> always regenerate
+    if external_meta_dir and read_eval_genes(external_meta_dir) is not None:
+        overwrite = True
 
     genes_override = None
     if external_dir is not None:

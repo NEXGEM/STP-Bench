@@ -55,8 +55,8 @@ def load_pred_adata(pred_path_fold: str, sample_id: str):
 def list_fold_samples(cfg) -> List[str]:
     """Sample IDs to run this fold's downstream analysis on.
 
-    Restricts to samples actually assigned "test" for this fold in `data`'s
-    own `ids.csv` (`fold_<fold>` column), intersected with what has a
+    Restricts to samples this fold's evaluation set holds in `data`'s own
+    `ids.csv` (`fold_<fold>` column: `val` for CV, `test` for a held-out set), intersected with what has a
     prediction file under `{pred_path_fold}/{sample_id}.h5ad`. A plain glob
     of the prediction directory is NOT enough on its own: that directory can
     accumulate stale `.h5ad` files from unrelated runs (a different fold, an
@@ -86,23 +86,23 @@ def list_fold_samples(cfg) -> List[str]:
         )
         return sorted(available)
 
-    import pandas as pd
+    from ids_io import read_ids, select_ids
 
-    ids_path = os.path.join(meta_dir, "ids.csv")
-    ids = pd.read_csv(ids_path)
+    ids = read_ids(meta_dir)
     fold_col = f"fold_{fold}"
     if fold_col not in ids.columns:
         return sorted(set(ids["sample_id"].astype(str)) & available)
 
-    test_ids = set(ids.loc[ids[fold_col] == "test", "sample_id"].astype(str))
+    test_ids = {str(x) for x in select_ids(ids, fold, "test")}
     return sorted(test_ids & available)
 
 
 def load_gene_panel(gene_path: str) -> List[str]:
     """Read the trained gene panel list, same `{'genes': [...]}` shape as
     `_external_gene_overlap`/`_user_gene_overlap` in api/stpbench.py."""
-    with open(gene_path) as f:
-        return json.load(f)["genes"]
+    from genes_io import read_genes_path
+
+    return read_genes_path(gene_path)
 
 
 def subset_to_genes(adata, genes: Sequence[str]):

@@ -1,6 +1,7 @@
 import os
 
 import json
+from genes_io import has_genes, read_genes
 import numpy as np
 from scipy import sparse
 import h5py
@@ -58,15 +59,13 @@ class BrSTNetDataset(STDataset):
             for candidate_dir in dict.fromkeys([self.meta_dir, ref_data_dir]):
                 if not candidate_dir:
                     continue
-                matches = glob(f"{candidate_dir}/total_*.json")
-                if matches:
-                    total_gene_path = matches[0]
+                if has_genes(candidate_dir, "total"):
+                    total_gene_path = candidate_dir
                     break
             if total_gene_path is None:
-                raise ValueError(f"total_*.json is not found in {self.meta_dir} or {ref_data_dir}")
+                raise ValueError(f"total gene set is not found in {self.meta_dir} or {ref_data_dir}")
 
-            with open(total_gene_path, 'r') as f:
-                total_genes = json.load(f)['genes']
+            total_genes = read_genes(total_gene_path, "total")
 
             self.remaining_genes = list(set(total_genes) - set(self.genes))
 

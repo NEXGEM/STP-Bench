@@ -1,0 +1,37 @@
+{
+ "sets": {
+  "eval": {
+   "genes": [
+    "BANK1",
+    "CCR7",
+    "CD163",
+    "CD3E",
+    "CD8A",
+    "CTLA4",
+    "EGFR",
+    "FOXP3",
+    "GZMA",
+    "KIT",
+    "LAG3",
+    "MKI67",
+    "PDGFRA",
+    "PRF1",
+    "SELL",
+    "SPIB",
+    "TCL1A",
+    "TNFRSF17"
+   ],
+   "train_set": "ncche/xenium",
+   "test_set": "external/hest/CRC_xenium",
+   "condition": "cross_tissue",
+   "panel": "fixed18",
+   "samples": [
+    "TENX111",
+    "TENX139",
+    "TENX147",
+    "TENX148",
+    "TENX149"
+   ]
+  }
+ }
+}

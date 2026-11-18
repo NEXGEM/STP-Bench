@@ -2,7 +2,7 @@
 """Download STP-Bench data from Hugging Face — full dataset, by dataset, or by sample.
 
 Examples:
-    # Full dataset (~444 GB)
+    # Full dataset (~706 GB)
     python scripts/download_data.py --data_dir /path/to/stp_bench
 
     # One or more datasets (namespace/name, matches config/data/<namespace>/<name>.yaml)
@@ -68,7 +68,7 @@ def main():
         allow_patterns = [tpl.format(sid=sid) for sid in sample_ids for tpl in FILE_TEMPLATES]
         print(f"Downloading {len(sample_ids)} sample(s): {', '.join(sample_ids)}")
     else:
-        print("No --dataset/--sample given -- downloading the full dataset (~444 GB).")
+        print("No --dataset/--sample given -- downloading the full dataset (~706 GB).")
 
     data_dir = snapshot_download(
         repo_id=args.repo_id,

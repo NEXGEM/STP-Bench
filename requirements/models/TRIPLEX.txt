@@ -1,5 +1,6 @@
 # Optional: only needed for TRIPLEX's Flash Attention path (config/model/
-# TRIPLEX.yaml). Not installed by scripts/create_env.sh by default -- install
+# TRIPLEX.yaml). TRIPLEX also needs access to MahmoodLab/UNI2-h (gated on HuggingFace;
+# the weights are read from the HF cache or from MODEL.uni_weights_path). Not installed by scripts/create_env.sh by default -- install
 # separately with:
 #   uv pip install -r requirements/models/TRIPLEX.txt --no-build-isolation
 #

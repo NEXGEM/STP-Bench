@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from genes_io import available_sets, gene_ref, path_exists, read_eval_genes, read_genes_path
 import re
 import subprocess
 import sys
@@ -629,17 +630,15 @@ def _external_gene_overlap(train_gene_path: str, ext_meta_dir: str, ext_data_dir
     original training panel, used to slice a fixed-width model output down
     to the genes that can actually be evaluated.
     """
-    if not os.path.isfile(train_gene_path):
+    if not path_exists(train_gene_path):
         return None
-    import json as _json
-
-    with open(train_gene_path) as f:
-        train_genes = _json.load(f)['genes']
+    train_genes = read_genes_path(train_gene_path)
 
     ids_path = os.path.join(ext_meta_dir, "ids.csv")
     if not os.path.isfile(ids_path):
         return None
-    sample_ids = pd.read_csv(ids_path)["sample_id"].dropna().astype(str).tolist()
+    from ids_io import read_ids as _read_ids
+    sample_ids = _read_ids(ext_meta_dir)["sample_id"].dropna().astype(str).tolist()
 
     from dataset.path_utils import st_dir as _resolve_st_dir
     st_root = _resolve_st_dir(ext_data_dir)
@@ -681,12 +680,9 @@ def _user_gene_overlap(
     found in the training panel, for the caller to warn about.
     """
     requested_genes = list(requested_genes)
-    if not os.path.isfile(train_gene_path):
+    if not path_exists(train_gene_path):
         return None, requested_genes
-    import json as _json
-
-    with open(train_gene_path) as f:
-        train_genes = _json.load(f)['genes']
+    train_genes = read_genes_path(train_gene_path)
     train_index = {gene: i for i, gene in enumerate(train_genes)}
 
     missing = [gene for gene in requested_genes if gene not in train_index]
@@ -753,9 +749,7 @@ def _restrict_to_model_gene_vocab(cfg) -> None:
         base_genes = list(cfg.DATA.genes_override)
         base_indices = list(cfg.DATA.gene_output_indices)
     else:
-        import json as _json
-        with open(cfg.MODEL.gene_path) as f:
-            base_genes = _json.load(f)["genes"]
+        base_genes = read_genes_path(cfg.MODEL.gene_path)
         base_indices = list(range(len(base_genes)))
     keep = [i for i, g in enumerate(base_genes) if g in vocab]
     if len(keep) < len(base_genes):
@@ -864,8 +858,7 @@ def _build_runtime_cfg(payload: Dict[str, Any]):
         cfg.GENERAL.log_dir = os.path.join(log_dir_parent, timestamp)
         cfg.MODEL.data_dir = cfg.DATA.get("meta_dir", cfg.DATA.data_dir)
         train_meta_dir = cfg.DATA.get("meta_dir", cfg.DATA.data_dir)
-        gene_path = f"{train_meta_dir}/{cfg.DATA.gene_type}_{cfg.DATA.num_genes}genes.json"
-        cfg.MODEL.gene_path = gene_path if os.path.isfile(gene_path) else f"{cfg.DATA.data_dir}/{cfg.DATA.gene_type}_{cfg.DATA.num_genes}genes.json"
+        cfg.MODEL.gene_path = gene_ref(train_meta_dir, cfg.DATA.gene_type, cfg.DATA.num_genes)
         _restrict_to_model_gene_vocab(cfg)
         if not payload["debug"]:
             os.makedirs(cfg.GENERAL.log_dir, exist_ok=True)
@@ -880,6 +873,7 @@ def _build_runtime_cfg(payload: Dict[str, Any]):
         cfg.GENERAL.log_dir = os.path.join(log_dir_parent, timestamp)
         saved_cfg_path = os.path.join(cfg.GENERAL.log_dir, "config.yaml")
         train_meta_dir_from_ckpt = None
+        train_gene_spec = None
         if not os.path.exists(saved_cfg_path) and payload.get("train_data_config"):
             # skip_train models (zero-shot, e.g. DeepSpotM/STPath) never run
             # train() and so never write a <log_dir>/config.yaml snapshot to
@@ -890,6 +884,11 @@ def _build_runtime_cfg(payload: Dict[str, Any]):
             # config directly.
             train_cfg = load_config(payload["train_data_config"])
             train_meta_dir_from_ckpt = train_cfg.DATA.get("meta_dir", train_cfg.DATA.data_dir)
+            # the gene panel (set <gene_type>_<num_genes>) is the TRAINING set's, not the eval set's
+            train_gene_spec = (train_cfg.DATA.get("gene_type", cfg.DATA.get("gene_type")), train_cfg.DATA.get("num_genes", cfg.DATA.get("num_genes")))
+            # ... and so are the other settings that define the reference panel/expression (as in the saved-config branch below)
+            for _k in ("gene_type", "num_genes", "num_outputs", "normalize", "cpm", "smooth"):
+                if train_cfg.DATA.get(_k) is not None: cfg.DATA[_k] = train_cfg.DATA.get(_k)
         if os.path.exists(saved_cfg_path):
             current_data = cfg.DATA
             cfg = load_config(saved_cfg_path)
@@ -933,8 +932,8 @@ def _build_runtime_cfg(payload: Dict[str, Any]):
             # its held-out test split.
             cfg.DATA.ref_data_dir = train_meta_dir
             cfg.DATA.ref_asset_dir = train_data_dir
-        gene_path = f"{train_meta_dir}/{cfg.DATA.gene_type}_{cfg.DATA.num_genes}genes.json"
-        cfg.MODEL.gene_path = gene_path if os.path.isfile(gene_path) else f"{train_data_dir}/{cfg.DATA.gene_type}_{cfg.DATA.num_genes}genes.json"
+        gtype, gnum = train_gene_spec if train_gene_spec else (cfg.DATA.gene_type, cfg.DATA.num_genes)
+        cfg.MODEL.gene_path = gene_ref(train_meta_dir, gtype, gnum)
         cfg.MODEL.ref_data_dir = train_meta_dir
         if payload["data"] != train_data:
             overlap = _external_gene_overlap(cfg.MODEL.gene_path, cfg.DATA.meta_dir, cfg.DATA.data_dir)
@@ -942,6 +941,39 @@ def _build_runtime_cfg(payload: Dict[str, Any]):
                 cfg.DATA.genes_override = overlap["genes"]
                 cfg.DATA.num_outputs = len(overlap["genes"])
                 cfg.DATA.gene_output_indices = overlap["indices"]
+        if payload.get("gene_list"):
+            # User-requested gene subset for evaluation (e.g. re-scoring an
+            # already-trained fixed-width checkpoint against a smaller gene
+            # panel without retraining) -- same mechanism as predict(gene_list=...)
+            # below, just wired into the evaluate path too. Composes with any
+            # restriction already applied above (e.g. _external_gene_overlap):
+            # gene_output_indices stays absolute into the *original* full
+            # training panel, matching _restrict_to_model_gene_vocab's contract.
+            overlap, missing = _user_gene_overlap(cfg.MODEL.gene_path, payload["gene_list"])
+            if missing:
+                _payload_logger(payload).warning(
+                    "gene_list_genes_missing",
+                    genes=",".join(missing),
+                    gene_path=cfg.MODEL.gene_path,
+                )
+            if overlap is None:
+                raise ValueError(
+                    "None of the requested gene_list genes are in the training "
+                    f"gene panel ({cfg.MODEL.gene_path})."
+                )
+            if cfg.DATA.get("genes_override"):
+                current = set(cfg.DATA.gene_output_indices)
+                pairs = [(g, i) for g, i in zip(overlap["genes"], overlap["indices"]) if i in current]
+            else:
+                pairs = list(zip(overlap["genes"], overlap["indices"]))
+            if not pairs:
+                raise ValueError(
+                    "Requested gene_list has no overlap with the currently "
+                    "active gene panel for this evaluation."
+                )
+            cfg.DATA.genes_override = [g for g, _ in pairs]
+            cfg.DATA.num_outputs = len(pairs)
+            cfg.DATA.gene_output_indices = [i for _, i in pairs]
         _restrict_to_model_gene_vocab(cfg)
         # Which evaluation this is, so its metrics are stored apart from every other one (internal: eval/,
         # external: eval_external/<data>/ -- see core.eval_subdir) and recorded in the fold's ledger.
@@ -1003,8 +1035,7 @@ def _build_runtime_cfg(payload: Dict[str, Any]):
         cfg.DATA.train_data_dir = train_data_dir
         cfg.DATA.ref_data_dir = train_meta_dir
         cfg.DATA.ref_asset_dir = train_data_dir
-        gene_path = f"{train_meta_dir}/{cfg.DATA.gene_type}_{cfg.DATA.num_genes}genes.json"
-        cfg.MODEL.gene_path = gene_path if os.path.isfile(gene_path) else f"{train_data_dir}/{cfg.DATA.gene_type}_{cfg.DATA.num_genes}genes.json"
+        cfg.MODEL.gene_path = gene_ref(train_meta_dir, cfg.DATA.gene_type, cfg.DATA.num_genes)
         cfg.MODEL.ref_data_dir = train_meta_dir
         if payload.get("gene_list"):
             overlap, missing = _user_gene_overlap(cfg.MODEL.gene_path, payload["gene_list"])
@@ -1539,6 +1570,7 @@ class STPred:
                 # also evaluate against known labels.
                 ext_kwargs = dict(kwargs)
                 ext_kwargs.setdefault("skip_model_preprocess", True)
+                ext_kwargs.setdefault("skip_splits", True)
                 summary["preprocess_external"] = self.preprocess(external_data, **ext_kwargs)
                 # preprocess_external above may have overwritten
                 # state["internal_data"] with `external_data` (its
@@ -1564,6 +1596,9 @@ class STPred:
         # with that context, not here where `data` is treated as a
         # standalone/primary dataset.
         skip_model_preprocess = overrides.pop("skip_model_preprocess", False)
+        # skip_splits: do not add CV fold columns to ids.csv (split_data rewrites the file) -- for evaluation-only
+        # data that is never trained on, e.g. an external test set
+        skip_splits = overrides.pop("skip_splits", False)
         models = overrides.pop("models", None)
         data_cfg = self._resolve_data(data)
         model_cfgs = self._resolve_models(models)
@@ -1602,8 +1637,9 @@ class STPred:
                 if pipeline.mode in ["raw", "stpbench"]:
                     with self.logger.section("preprocess_genesets", data=data_cfg.name):
                         pipeline.prepare_genesets()
-                    with self.logger.section("preprocess_splits", data=data_cfg.name):
-                        pipeline.split_data()
+                    if not skip_splits:
+                        with self.logger.section("preprocess_splits", data=data_cfg.name):
+                            pipeline.split_data()
 
             for task in plan["feature_tasks"]:
                 task_config = dict(config)
@@ -1657,6 +1693,7 @@ class STPred:
         external_data: Optional[str] = None,
         folds: Optional[Sequence[int]] = None,
         timestamps: Optional[Dict[str, str] | str] = None,
+        gene_list: Optional[Sequence[str]] = None,
     ) -> BenchmarkResult:
         """Evaluate all models on internal or external data."""
 
@@ -1687,7 +1724,7 @@ class STPred:
             train_data_cfg = self._resolve_data(train_data)
             if self._has_missing_external_base_artifacts(ext_data_cfg, model_cfgs):
                 with self.logger.section("preprocess_external", data=ext_data_cfg.name):
-                    self.preprocess(data=eval_data, skip_model_preprocess=True)
+                    self.preprocess(data=eval_data, skip_model_preprocess=True, skip_splits=True)
             self._run_external_model_preprocess(ext_data_cfg, train_data_cfg, model_cfgs)
         results = self._run_models(
             action="evaluate",
@@ -1695,6 +1732,7 @@ class STPred:
             folds=folds,
             timestamps=timestamps,
             train_data=train_data,
+            gene_list=gene_list,
         )
         self.state["eval_results"][(mode, eval_data)] = results
         return results
@@ -1704,10 +1742,11 @@ class STPred:
         data: Optional[str] = None,
         folds: Optional[Sequence[int]] = None,
         timestamps: Optional[Dict[str, str] | str] = None,
+        gene_list: Optional[Sequence[str]] = None,
     ) -> BenchmarkResult:
         """Evaluate trained models on the internal test folds."""
 
-        return self.evaluate(mode="int", data=data, folds=folds, timestamps=timestamps)
+        return self.evaluate(mode="int", data=data, folds=folds, timestamps=timestamps, gene_list=gene_list)
 
     def evaluate_external(
         self,
@@ -1715,6 +1754,7 @@ class STPred:
         train_data: Optional[str] = None,
         folds: Optional[Sequence[int]] = None,
         timestamps: Optional[Dict[str, str] | str] = None,
+        gene_list: Optional[Sequence[str]] = None,
     ) -> BenchmarkResult:
         """Evaluate trained models on an external labeled dataset."""
 
@@ -1724,6 +1764,7 @@ class STPred:
             external_data=data,
             folds=folds,
             timestamps=timestamps,
+            gene_list=gene_list,
         )
 
     def predict(
@@ -1808,7 +1849,7 @@ class STPred:
                 # silently pointing gene-panel resolution at output_dir
                 # (which has no genes.json) instead of the real training
                 # run's meta_dir -- surfacing later as a confusing
-                # "<...>genes.json is not found" error far from the cause.
+                # "gene set not found" error far from the cause.
                 raise ValueError(
                     f"predict(data={data!r}, ckpt_path=...) also needs "
                     "train_data (or a prior train()/from_run() call on this "
@@ -1924,12 +1965,9 @@ class STPred:
         train_meta_dir = _abs_path(
             self.repo_root, train_data_section.get("meta_dir", train_data_section.get("data_dir"))
         )
-        train_data_dir = _abs_path(self.repo_root, train_data_section.get("data_dir"))
         gene_type = train_data_section.get("gene_type")
         num_genes = train_data_section.get("num_genes")
-        gene_path = f"{train_meta_dir}/{gene_type}_{num_genes}genes.json"
-        if not os.path.isfile(gene_path):
-            gene_path = f"{train_data_dir}/{gene_type}_{num_genes}genes.json"
+        gene_path = gene_ref(train_meta_dir, gene_type, num_genes)
 
         fold_values = list(folds) if folds is not None else list(range(train_data_cfg.config.get("TRAINING", {}).get("num_k", 1)))
         downstream_params = self._merge_downstream_defaults(mode, data_cfg, overrides)
@@ -2510,7 +2548,9 @@ class STPred:
             patch_encoder = data_section.get("model_name", "uni_v2")
             feature_type = data_section.get("feature_type", "global")
             features = _feature_set(feature_type)
-            feature_requirements[patch_encoder].update(features)
+            # uni_conch (Stem native) = pre-extracted features_uni_v1 + features_conch_v1 (StemDataset reads both); no extractor of that name exists
+            if patch_encoder != "uni_conch":
+                feature_requirements[patch_encoder].update(features)
             if platform is None:
                 platform = str(data_section.get("tech", "visium")).lower()
             if n_splits is None:
@@ -2842,13 +2882,21 @@ class STPred:
 
         required = [data_dir, os.path.join(meta_dir, "ids.csv")]
         if mode != "inference":
-            required.append(os.path.join(meta_dir, f"{gene_type}_{num_genes}genes.json"))
             id_path = os.path.join(meta_dir, "ids.csv")
             try:
                 id_cols = pd.read_csv(id_path, nrows=1).columns
             except Exception:
                 id_cols = []
-            for fold in range(num_k):
+            # Evaluation-only dirs (external / cross_external) need neither a training gene set nor splits/ --
+            # the train dir's gene panel is reused. Marks: ids.csv without fold_* columns, an "eval" gene set
+            # (cross_external), or an external/ dataset without gene sets of its own.
+            no_folds = os.path.isfile(id_path) and not any(str(c).startswith("fold_") for c in id_cols)
+            train_sets = [k for k in available_sets(meta_dir) if k != "eval" and not k.startswith("eval_")]
+            external_name = data_cfg.name.split("/")[0] in ("external", "cross_external")
+            eval_only = no_folds or read_eval_genes(meta_dir) is not None or (external_name and not train_sets)
+            if not eval_only:
+                required.append(gene_ref(meta_dir, gene_type, num_genes))
+            for fold in range(0 if eval_only else num_k):
                 if f"fold_{fold}" not in id_cols:
                     required.append(os.path.join(data_dir, "splits", f"train_{fold}.csv"))
                     required.append(os.path.join(data_dir, "splits", f"test_{fold}.csv"))
@@ -2893,7 +2941,7 @@ class STPred:
             if artifact_dir:
                 required.append(_abs_path(data_dir, artifact_dir))
 
-        missing = [path for path in required if path and not os.path.exists(path)]
+        missing = [path for path in required if path and not os.path.exists(path) and not path_exists(path)]
         return {
             "model": model_cfg.name,
             "data": data_cfg.name,
@@ -2923,11 +2971,11 @@ class STPred:
         ids_path = os.path.join(meta_dir, "ids.csv")
         if not os.path.isfile(ids_path):
             return []
-        with open(ids_path, newline="") as f:
-            reader = csv.DictReader(f)
-            if "sample_id" not in (reader.fieldnames or []):
-                return []
-            return [row["sample_id"] for row in reader if row.get("sample_id")]
+        from ids_io import read_ids
+        df = read_ids(meta_dir, dtype=str, keep_default_na=False)
+        if "sample_id" not in df.columns:
+            return []
+        return [x for x in df["sample_id"] if x]
 
     @staticmethod
     def _first_existing_candidate(paths: Sequence[str]) -> str:

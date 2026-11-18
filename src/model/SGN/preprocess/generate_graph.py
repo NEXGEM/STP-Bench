@@ -3,6 +3,13 @@ from tqdm import tqdm
 import numpy as np
 import torch
 import os
+import sys as _sys
+_p = os.path.abspath(__file__)
+while os.path.basename(_p) != "src" and _p != os.path.dirname(_p):
+    _p = os.path.dirname(_p)
+_sys.path.insert(0, _p)
+from ids_io import read_ids, phase_label
+from genes_io import has_genes, read_genes, read_eval_genes
 from collections import namedtuple
 import torch_geometric
 import argparse
@@ -17,6 +24,58 @@ sys.path.insert(0, src_path)
 from src.dataset.egn import EGNDataset
 
 
+def _external_genes_override(meta_dir, asset_dir, external_meta_dir, external_asset_dir, gene_type, num_genes):
+    """Restrict the training gene panel to genes actually measured in the
+    external dataset, mirroring src/api/stpbench.py's _external_gene_overlap.
+
+    This script runs as a standalone subprocess (invoked via extra_preprocess)
+    and never goes through STPBench's runtime-config orchestration, so it
+    can't just read cfg.DATA.genes_override — it has to recompute the overlap
+    itself. Returns None when the full training panel is available in the
+    external data (no restriction needed) or the check can't be performed.
+    """
+    import json
+    train_genes = None
+    for candidate_dir in dict.fromkeys([meta_dir, asset_dir]):
+        if candidate_dir and has_genes(candidate_dir, gene_type, num_genes):
+            train_genes = read_genes(candidate_dir, gene_type, num_genes)
+            break
+    if train_genes is None:
+        return None
+
+    ids_path = os.path.join(external_meta_dir, "ids.csv")
+    if not os.path.isfile(ids_path):
+        return None
+    sample_ids = read_ids(external_meta_dir)["sample_id"].dropna().astype(str).tolist()
+
+    from dataset.path_utils import st_dir as resolve_st_dir
+    st_root = resolve_st_dir(external_asset_dir)
+
+    measured = None
+    try:
+        import scanpy as sc
+        for name in sample_ids:
+            path = os.path.join(st_root, f"{name}.h5ad")
+            if not os.path.isfile(path):
+                continue
+            var_names = set(sc.read_h5ad(path, backed='r').var_names)
+            measured = var_names if measured is None else (measured & var_names)
+    except Exception:
+        return None
+    if not measured:
+        return None
+
+    overlap = [g for g in train_genes if g in measured]
+    # explicit evaluation gene list shipped with the external dataset (cross_external): targets must equal the sliced predictions
+    requested = read_eval_genes(external_meta_dir)
+    if requested is not None:
+        requested = set(requested)
+        overlap = [g for g in overlap if g in requested]
+    if len(overlap) == len(train_genes):
+        return None
+    return overlap
+
+
 def _num_folds(meta_dir):
     ids_path = os.path.join(meta_dir, "ids.csv")
     ids = pd.read_csv(ids_path, nrows=1)
@@ -28,11 +87,11 @@ def _num_folds(meta_dir):
 
 def _read_ids(meta_dir, phase, fold):
     ids_path = os.path.join(meta_dir, "ids.csv")
-    ids = pd.read_csv(ids_path)
+    ids = read_ids(meta_dir)
     fold_col = f"fold_{fold}"
     if fold_col not in ids.columns:
         raise FileNotFoundError(f"{fold_col} is missing from {ids_path}")
-    return ids.loc[ids[fold_col].astype(str).str.lower() == phase].reset_index(drop=True)
+    return ids.loc[ids[fold_col].astype(str).str.lower() == phase_label(ids, phase)].reset_index(drop=True)
 
 
 def get_edge(x):
@@ -75,7 +134,15 @@ def main(
     asset_dir = asset_dir or data_dir
     external_asset_dir = external_asset_dir or external_dir
     external_meta_dir = external_meta_dir or external_dir
+    # cross_external datasets ship their own evaluation gene list: cached graphs hold labels for another list -> always regenerate
+    if external_meta_dir and read_eval_genes(external_meta_dir) is not None:
+        overwrite = True
     num_fold = _num_folds(meta_dir)
+    genes_override = None
+    if external_dir is not None:
+        genes_override = _external_genes_override(
+            meta_dir, asset_dir, external_meta_dir, external_asset_dir, gene_type, num_genes,
+        )
 
     for fold in range(num_fold):
         if fold_idx is not None and fold != fold_idx:
@@ -99,7 +166,7 @@ def main(
                     continue  # skip training phase for exemplar generation
                 
                 test_split = os.path.join(external_meta_dir, "ids.csv")
-                dataset = pd.read_csv(test_split)
+                dataset = read_ids(external_meta_dir)
 
                 # Namespace by the training run's own meta_dir, matching
                 # EGNDataset's own `ref_data` derivation -- deriving this from
@@ -135,6 +202,7 @@ def main(
                 model_name=model_name,
                 ref_data_dir=ref_data_dir,
                 ref_asset_dir=asset_dir if ref_data_dir is not None else None,
+                genes_override=genes_override if ref_data_dir is not None else None,
                 load_level='slide' 
             )
             

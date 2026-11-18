@@ -71,14 +71,7 @@ def match_labels_to_reference(ref_labels: pd.Series, pred_labels: pd.Series) -> 
     return mapping, float(accuracy)
 
 
-def run_spagcn_sample(spg, adata, params: Dict[str, Any]):
-    """Cluster one sample's expression into spatial domains.
-
-    `params` fields (see config/downstream/defaults.yaml[spatial_domain]):
-    n_clusters, p, l_start/l_end/l_tol/l_max_run, res_start/res_step,
-    tol, lr, search_epochs, max_epochs, refine, refine_shape, seed.
-    """
-    seed = params.get("seed", 100)
+def _seed_all(seed):
     random.seed(seed)
     np.random.seed(seed)
     try:
@@ -87,6 +80,66 @@ def run_spagcn_sample(spg, adata, params: Dict[str, Any]):
         torch.manual_seed(seed)
     except Exception:
         pass
+
+
+def _fit_spagcn(spg, adata_train, adj, l_value, n_clusters, params):
+    """search_res for `n_clusters`, then train; returns (clf, y_pred, prob, resolution)."""
+    seed = params.get("seed", 100)
+    _seed_all(seed)
+    resolution = params.get("resolution")
+    if resolution is None:
+        resolution = spg.search_res(
+            adata_train, adj, l_value, n_clusters,
+            start=params.get("res_start", 0.2), step=params.get("res_step", 0.1),
+            tol=params.get("tol", 5e-3), lr=params.get("lr", 0.05),
+            max_epochs=params.get("search_epochs", 20),
+            r_seed=seed, t_seed=seed, n_seed=seed,
+        )
+    clf = spg.SpaGCN()
+    clf.set_l(l_value)
+    clf.train(
+        adata_train, adj, init_spa=True, init="louvain", res=resolution,
+        tol=params.get("tol", 5e-3), lr=params.get("lr", 0.05),
+        max_epochs=params.get("max_epochs", 200),
+    )
+    y_pred, prob = clf.predict()
+    return clf, y_pred, prob, resolution
+
+
+def _silhouette(clf, y_pred, max_cells: int, seed: int) -> float:
+    """Silhouette of the SpaGCN embedding (clf.embed), on <= max_cells cells."""
+    from sklearn.metrics import silhouette_score
+
+    y = np.asarray(y_pred)
+    if len(np.unique(y)) < 2:
+        return float("nan")
+    embed = np.asarray(clf.embed)
+    n = embed.shape[0]
+    rng = np.random.RandomState(seed)
+    idx = rng.choice(n, max_cells, replace=False) if n > max_cells else np.arange(n)
+    if len(np.unique(y[idx])) < 2:
+        return float("nan")
+    return float(silhouette_score(embed[idx], y[idx]))
+
+
+def run_spagcn_sample(spg, adata, params: Dict[str, Any], n_clusters: Optional[int] = None):
+    """Cluster one sample's expression into spatial domains.
+
+    Number of domains:
+      * `n_clusters` argument (e.g. the k chosen on GT) wins if given;
+      * else `params["n_cluster_candidates"]` (e.g. [3, 5, 7, 9]) -> k with the
+        highest silhouette (clf.embed, <= `silhouette_max_cells` cells), ties
+        broken toward the smaller k; the per-k table is kept in
+        adata.uns["spagcn"]["silhouette"];
+      * else `params["n_clusters"]` (default 7).
+
+    `params` fields (see config/downstream/defaults.yaml[spatial_domain]):
+    n_clusters, n_cluster_candidates, silhouette_max_cells, p,
+    l_start/l_end/l_tol/l_max_run, res_start/res_step, tol, lr,
+    search_epochs, max_epochs, refine, refine_shape, seed.
+    """
+    seed = params.get("seed", 100)
+    _seed_all(seed)
 
     adata_train = preprocess_for_spagcn(spg, adata)
     if adata_train.n_obs < adata.n_obs:
@@ -103,25 +156,24 @@ def run_spagcn_sample(spg, adata, params: Dict[str, Any]):
             tol=params.get("l_tol", 0.01), max_run=params.get("l_max_run", 100),
         )
 
-    n_clusters = params.get("n_clusters", 7)
-    resolution = params.get("resolution")
-    if resolution is None:
-        resolution = spg.search_res(
-            adata_train, adj, l_value, n_clusters,
-            start=params.get("res_start", 0.2), step=params.get("res_step", 0.1),
-            tol=params.get("tol", 5e-3), lr=params.get("lr", 0.05),
-            max_epochs=params.get("search_epochs", 20),
-            r_seed=seed, t_seed=seed, n_seed=seed,
-        )
-
-    clf = spg.SpaGCN()
-    clf.set_l(l_value)
-    clf.train(
-        adata_train, adj, init_spa=True, init="louvain", res=resolution,
-        tol=params.get("tol", 5e-3), lr=params.get("lr", 0.05),
-        max_epochs=params.get("max_epochs", 200),
-    )
-    y_pred, prob = clf.predict()
+    candidates = params.get("n_cluster_candidates")
+    sil_table = []
+    if n_clusters is None and candidates:
+        best = None
+        for k in sorted(int(c) for c in candidates):
+            clf_k, y_k, prob_k, res_k = _fit_spagcn(spg, adata_train, adj, l_value, k, params)
+            sil = _silhouette(clf_k, y_k, int(params.get("silhouette_max_cells", 10000)), seed)
+            sil_table.append({"k": k, "silhouette": sil, "resolution": float(res_k),
+                              "n_found": int(len(np.unique(y_k)))})
+            # strict '>' keeps the smaller k on ties; NaN never wins
+            if np.isfinite(sil) and (best is None or sil > best[0]):
+                best = (sil, k, y_k, prob_k, res_k)
+        if best is None:
+            raise RuntimeError("silhouette undefined for every candidate k")
+        _, n_clusters, y_pred, prob, resolution = best
+    else:
+        n_clusters = int(n_clusters if n_clusters is not None else params.get("n_clusters", 7))
+        _, y_pred, prob, resolution = _fit_spagcn(spg, adata_train, adj, l_value, n_clusters, params)
 
     adata.obs["spagcn_pred"] = pd.Categorical(y_pred.astype(str))
     adata.obsm["spagcn_prob"] = prob
@@ -133,6 +185,9 @@ def run_spagcn_sample(spg, adata, params: Dict[str, Any]):
         "genes": int(adata.n_vars),
         "cells": int(adata.n_obs),
     }
+    if sil_table:
+        adata.uns["spagcn"]["silhouette"] = {str(r["k"]): r["silhouette"] for r in sil_table}
+        adata.uns["spagcn"]["k_selected_by"] = "silhouette"
 
     if params.get("refine", True):
         refined_pred = spg.refine(

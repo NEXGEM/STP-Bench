@@ -1,0 +1,54 @@
+{
+ "sets": {
+  "eval": {
+   "genes": [
+    "ACTA2",
+    "BANK1",
+    "CCL5",
+    "CCR7",
+    "CD14",
+    "CD163",
+    "CD3E",
+    "CD79A",
+    "CD83",
+    "CD8A",
+    "CPA3",
+    "CTLA4",
+    "CXCR4",
+    "EGFR",
+    "FOXP3",
+    "GNLY",
+    "GPR183",
+    "GZMA",
+    "GZMK",
+    "HAVCR2",
+    "IL7R",
+    "KIT",
+    "KLRB1",
+    "KLRD1",
+    "LAG3",
+    "LILRA4",
+    "MKI67",
+    "MS4A1",
+    "NKG7",
+    "PDGFRA",
+    "PRF1",
+    "SELL",
+    "SPIB",
+    "TCL1A",
+    "TNFRSF17"
+   ],
+   "train_set": "lausanne/breast_xenium",
+   "test_set": "external/hest/CRC_xenium",
+   "condition": "cross_tissue",
+   "panel": "fixed35",
+   "samples": [
+    "TENX111",
+    "TENX139",
+    "TENX147",
+    "TENX148",
+    "TENX149"
+   ]
+  }
+ }
+}

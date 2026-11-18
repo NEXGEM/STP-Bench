@@ -132,6 +132,7 @@ class DataPipeline:
         self.wsi_dataroot = (
             self._abs(wsi_dir_override) if wsi_dir_override
             else f"{self.input_dir}/wsis" if mode == 'stpbench'
+            else f"{self.input_dir}/wsis" if os.path.isdir(f"{self.input_dir}/wsis")   # inference on asset dir: slides live in <dir>/wsis (needed to re-crop neighbor patches whose img was dropped)
             else self.input_dir
         )
         feature_type = self.config.get('feature_type')
@@ -489,6 +490,9 @@ class DataPipeline:
         print("Removing neighbor patch images to free disk space...")
         for h5_path in glob(f"{patch_dir}/*.h5"):
             try:
+                with h5py.File(h5_path, 'r') as f:   # read-only check first: opening in 'a' takes an exclusive lock and collides with concurrent readers
+                    if 'img' not in f:
+                        continue
                 with h5py.File(h5_path, 'a') as f:
                     if 'img' in f:
                         del f['img']
@@ -538,7 +542,9 @@ class DataPipeline:
         return True
 
     def _has_genesets(self) -> bool:
-        return bool(glob(f"{self.metadata_dir}/*genes.json"))
+        from genes_io import available_sets
+
+        return bool(available_sets(self.metadata_dir))
 
     def _has_splits(self) -> bool:
         id_path = f"{self.metadata_dir}/ids.csv"
