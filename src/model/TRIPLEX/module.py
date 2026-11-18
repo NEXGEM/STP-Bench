@@ -96,12 +96,13 @@ class MultiHeadAttention(nn.Module):
 
     @torch.no_grad()
     def train(self, mode=True):
+        super().train(mode)
         if self.attn_bias:
-            super().train(mode)
             if mode and hasattr(self, 'ab'):
                 del self.ab
             else:
                 self.ab = self.attention_biases[:, self.attention_bias_idxs]
+        return self
         
     def forward(self, x, mask = None, return_attn=False):
         
@@ -109,7 +110,7 @@ class MultiHeadAttention(nn.Module):
         
         if self.flash_attn:
             qkv = rearrange(qkv, 'b n (h d a) -> b n a h d', h = self.heads, a=3)
-            out = flash_attn_qkvpacked_func(qkv, self.drop_p, softmax_scale=None, causal=False)
+            out = flash_attn_qkvpacked_func(qkv, self.drop_p if self.training else 0.0, softmax_scale=None, causal=False)
             out = rearrange(out, 'b n h d -> b n (h d)')
             
         else:
